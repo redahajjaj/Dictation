@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import queue
+import re
 import subprocess
 import sys
 import tempfile
@@ -28,6 +29,7 @@ from pynput import keyboard
 
 BASE = Path(__file__).resolve().parent
 VOCABOLARIO = BASE / "vocabolario.txt"
+CORREZIONI = BASE / "correzioni.txt"
 STORICO = BASE / "storico.md"
 ENV = BASE / ".env"
 
@@ -35,11 +37,13 @@ API = "https://api.groq.com/openai/v1"
 MODELLO_STT = "whisper-large-v3-turbo"
 # in ordine di preferenza; il primo davvero disponibile sull'account vince
 LLM_PREFERITI = [
-    "llama-3.3-70b-versatile",
-    "moonshotai/kimi-k2-instruct",
-    "qwen/qwen3-32b",
-    "llama-3.1-8b-instant",
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.6-27b",
+    "openai/gpt-oss-20b",
 ]
+# modelli da non usare mai per la pulitura: sintesi vocale, moderazione,
+# modelli minuscoli o agentici (compound naviga il web: qui non serve)
+MAI = ("whisper", "tts", "guard", "orpheus", "allam", "compound")
 
 FREQUENZA = 16_000  # Hz: quanto basta al parlato, e tiene i file piccoli
 DURATA_MAX = 15 * 60  # taglio di sicurezza se ti dimentichi il microfono aperto
@@ -73,6 +77,38 @@ def carica_vocabolario() -> list[str]:
     return voci
 
 
+def carica_correzioni() -> list[tuple[re.Pattern, str]]:
+    """«Acmelux = byteelux, by tea lux» → regex che riscrivono la forma giusta.
+
+    Le varianti più lunghe vanno cercate per prime, altrimenti una corta
+    contenuta in una lunga la spezzerebbe a metà.
+    """
+    if not CORREZIONI.exists():
+        return []
+    coppie = []
+    for riga in CORREZIONI.read_text(encoding="utf-8").splitlines():
+        riga = riga.strip()
+        if not riga or riga.startswith("#") or "=" not in riga:
+            continue
+        giusto, _, varianti = riga.partition("=")
+        giusto = giusto.strip()
+        for v in varianti.split(","):
+            v = v.strip()
+            if v and v.lower() != giusto.lower():
+                coppie.append((v, giusto))
+    coppie.sort(key=lambda c: len(c[0]), reverse=True)
+    return [
+        (re.compile(r"(?<!\w)" + re.escape(v).replace(r"\ ", r"\s+") + r"(?!\w)", re.IGNORECASE), g)
+        for v, g in coppie
+    ]
+
+
+def applica_correzioni(testo: str, regole) -> str:
+    for rx, giusto in regole:
+        testo = rx.sub(giusto, testo)
+    return testo
+
+
 # ------------------------------------------------------------------ istruzioni
 BASE_REGOLE = """Sei un correttore di trascrizioni, non un assistente.
 
@@ -87,7 +123,10 @@ COSA CORREGGERE
 - Se chi parla si corregge ("no, anzi..."), tieni solo la versione corretta.
 - Se detta la punteggiatura a voce ("virgola", "punto", "a capo", "due punti"), convertila nel segno.
 - Comandi, percorsi e codice vanno scritti come si scrivono: `git push`, `~/Progetti`, `tsc --noEmit`.
-- Nomi propri e termini tecnici: usa ESATTAMENTE la grafia dell'elenco, quando il suono corrisponde."""
+- Nomi propri e termini tecnici: usa ESATTAMENTE la grafia dell'elenco, quando il suono corrisponde.
+- Non aggiungere simboli di valuta, unità di misura o percentuali che non siano stati detti: i numeri restano nudi.
+- I nomi già scritti correttamente NON si toccano.
+- Numeri detti a parole restano cifre se erano cifre: non convertire né arrotondare."""
 
 ISTRUZIONI = {
     "pulito": BASE_REGOLE + """
@@ -127,9 +166,10 @@ class Groq:
             if m in attivi:
                 self._llm = m
                 return m
-        esclusi = ("whisper", "tts", "guard", "prompt-guard")
-        restanti = sorted(m for m in attivi if not any(e in m for e in esclusi))
-        self._llm = restanti[0] if restanti else LLM_PREFERITI[-1]
+        restanti = sorted(m for m in attivi if not any(e in m for e in MAI))
+        if not restanti:
+            raise RuntimeError("nessun modello adatto alla pulitura su questo account Groq")
+        self._llm = restanti[0]
         return self._llm
 
     def trascrivi(self, audio: Path, suggerimento: str) -> str:
@@ -193,6 +233,7 @@ class App(rumps.App):
         super().__init__("🎙", quit_button=None)
         self.cfg = carica_env()
         self.vocabolario = carica_vocabolario()
+        self.correzioni = carica_correzioni()
         self.groq = Groq(self.cfg.get("GROQ_API_KEY", ""), self.cfg.get("DETTATURA_LLM", ""))
         self.modo = "pulito"
 
@@ -328,7 +369,15 @@ class App(rumps.App):
                 self._eventi.put(("niente voce", "🎙"))
                 return
 
-            testo = grezzo if self.modo == "grezzo" else self.groq.ripulisci(grezzo, self.modo, self.vocabolario)
+            # prima le sostituzioni sicure, così l'LLM legge già i nomi giusti;
+            # poi di nuovo dopo, nel caso li abbia storpiati riscrivendo
+            grezzo = applica_correzioni(grezzo, self.correzioni)
+            if self.modo == "grezzo":
+                testo = grezzo
+            else:
+                testo = applica_correzioni(
+                    self.groq.ripulisci(grezzo, self.modo, self.vocabolario), self.correzioni
+                )
 
             negli_appunti(testo)
             self._ultimo = testo

@@ -12,7 +12,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from dettatura import Groq, carica_env, carica_vocabolario
+from dettatura import Groq, applica_correzioni, carica_correzioni, carica_env, carica_vocabolario
 
 FRASE = (
     "allora senti, per Acmelux dobbiamo chiudere i sei bloccanti trovati dalle review, "
@@ -39,16 +39,20 @@ def main() -> int:
 
     g = Groq(cfg["GROQ_API_KEY"], cfg.get("DETTATURA_LLM", ""))
     voc = carica_vocabolario()
+    corr = carica_correzioni()
 
     t0 = time.time()
     grezzo = g.trascrivi(audio, "Dettatura in italiano. Termini ricorrenti: " + ", ".join(voc[:60]))
     t_stt = time.time() - t0
 
+    corretto = applica_correzioni(grezzo, corr)
+
     t0 = time.time()
-    pulito = g.ripulisci(grezzo, "pulito", voc)
+    pulito = applica_correzioni(g.ripulisci(corretto, "pulito", voc), corr)
     t_llm = time.time() - t0
 
     print(f"── GREZZO (whisper, {t_stt:.1f}s) ──\n{grezzo}\n")
+    print(f"── DOPO LE CORREZIONI ──\n{corretto}\n")
     print(f"── PULITO ({g.llm()}, {t_llm:.1f}s) ──\n{pulito}\n")
 
     attesi = ["Acmelux", "Nordvento", "Stripe", "Groq", "Supabase", "Mario Rossi", "VPS"]
