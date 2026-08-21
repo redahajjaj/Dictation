@@ -29,10 +29,29 @@ Il tondo rosso e ⌘⇧D fanno la stessa cosa: partire e fermarsi.
 
 Mentre registri, attorno al bottone si allarga un alone che segue la tua voce —
 serve a vedere a colpo d'occhio che il microfono sta prendendo davvero qualcosa.
-Il pannello resta aperto finché registri, e ti mostra il tempo che scorre.
+
+## Il testo si forma mentre parli
+
+**In grigio** compare quello che stai dicendo, aggiornato ogni pochi secondi.
+**In nero** resta quello che è già definitivo.
+
+Groq non trascrive in streaming, quindi l'anteprima manda a Whisper i pezzi già
+pronunciati, tagliati **dove fai una pausa** — così un taglio non spezza mai una
+parola a metà. Se parli di fila senza respirare, taglia comunque ogni 5 secondi.
+
+Quando fermi la registrazione l'audio viene ritrascritto **per intero**: il
+grigio sparisce e lascia il posto al testo definitivo, che è più preciso perché
+Whisper ha visto tutta la frase invece che un pezzo per volta. In una prova su
+16 secondi di parlato: anteprima 4 nomi giusti su 6, definitivo 6 su 6.
+
+L'anteprima si spegne dal menu (*Anteprima mentre parli*) se preferisci
+risparmiare chiamate.
 
 A fine dettatura il testo compare lì: lo leggi, lo correggi se serve, e **Copia**
 (o Invio) manda negli appunti la versione che vedi. È già negli appunti comunque.
+
+Il tasto **Copia** lampeggia di blu e la finestra **resta aperta**: puoi copiare,
+incollare, e continuare a dettare senza riaprire niente.
 
 **Le dettature si accumulano**: la seconda va in coda alla prima, separata da una
 riga vuota — puoi dettare un pensiero, fermarti, pensare, e riprendere. Negli

@@ -110,6 +110,14 @@ LLM_PREFERITI = [
 MAI = ("whisper", "tts", "guard", "orpheus", "allam", "compound")
 
 FREQUENZA = 16_000  # Hz: quanto basta al parlato, e tiene i file piccoli
+
+# --- anteprima mentre parli --------------------------------------------------
+# Groq non trascrive in streaming: si mandano blocchi. Il taglio cade nelle
+# pause del parlato, così non spezza mai una parola a metà.
+SILENZIO = 0.055      # sotto questo livello è silenzio
+PAUSA = 0.45          # tanto silenzio chiude un blocco
+BLOCCO_MIN = 1.3      # meno di così non vale la pena mandarlo
+BLOCCO_MAX = 5.0      # se parli senza respirare, si manda comunque
 DURATA_MAX = 15 * 60  # taglio di sicurezza se ti dimentichi il microfono aperto
 
 
@@ -324,8 +332,11 @@ class App(rumps.App):
         self.m_prompt = rumps.MenuItem("Istruzione per l'agente", callback=self.scegli_modo)
         self.m_grezzo = rumps.MenuItem("Grezzo (senza LLM)", callback=self.scegli_modo)
         self.m_pulito.state = 1
+        self.m_live = rumps.MenuItem("Anteprima mentre parli", callback=self.alterna_live)
+        self.m_live.state = 1
         self.menu = [
             {"Modalità": [self.m_pulito, self.m_prompt, self.m_grezzo]},
+            self.m_live,
             None,
             rumps.MenuItem("Apri le correzioni", callback=self.apri_correzioni),
             rumps.MenuItem("Apri il vocabolario", callback=self.apri_vocabolario),
@@ -384,6 +395,9 @@ class App(rumps.App):
             if m is item:
                 self.modo = nome
 
+    def alterna_live(self, item):
+        item.state = 0 if item.state else 1
+
     def apri_vocabolario(self, _):
         subprocess.run(["open", "-t", str(VOCABOLARIO)])
 
@@ -433,7 +447,7 @@ class App(rumps.App):
             self._ultimo = testo
         self._stato, self._etichetta = PRONTO, "copiato negli appunti"
         self._pannello.aggiorna(self._stato, self._etichetta)
-        self._pannello.chiudi()
+        self._pannello.segnala_copia()   # la finestra resta aperta: lo dice il colore
 
     def svuota_pannello(self):
         self._ultimo = ""
@@ -447,10 +461,13 @@ class App(rumps.App):
             self._aggancia_icona()
 
         testo_nuovo = None
+        anteprima_nuova = None
         while not self._eventi.empty():
             ev = self._eventi.get()
             if ev == "premuto":
                 self._alterna()
+            elif isinstance(ev, tuple) and ev[0] == "anteprima":
+                anteprima_nuova = ev[1]
             elif isinstance(ev, tuple):
                 self._stato, self._etichetta = ev[0], ev[1]
                 if len(ev) > 2:
@@ -465,6 +482,12 @@ class App(rumps.App):
                 self._alterna()
         else:
             self.title = ICONE.get(self._stato, "🎙")
+
+        if anteprima_nuova is not None:
+            p = self._crea_pannello()
+            if not p.e_aperto():
+                p.apri()
+            p.mostra_anteprima(self._testo_fisso, anteprima_nuova)
 
         if testo_nuovo is not None:
             p = self._crea_pannello()
@@ -500,14 +523,26 @@ class App(rumps.App):
             rumps.alert("Microfono non disponibile", str(e))
             return
         self._inizio = time.time()
+        self._ultimo_suono = time.time()
         self.registrando = True
         self._stato = REGISTRA
+        # quello che c'è già nella finestra resta fermo: l'anteprima gli va in coda
+        if self._pannello is not None and self._pannello.e_aperto():
+            self._testo_fisso = self._pannello.testo_corrente()
+        else:
+            self._testo_fisso = self._ultimo
+        self._anteprima = ""
+        if self.m_live.state:
+            self._ciclo_vivo = True
+            threading.Thread(target=self._ciclo_anteprima, daemon=True).start()
 
     def _arriva_audio(self, dati, *_):
         self._pezzi.append(dati.copy())
         # RMS normalizzato: il parlato normale sta sotto i 4000 su int16
         forza = float(np.sqrt(np.mean(dati.astype(np.float32) ** 2)))
         self._livello = min(1.0, forza / 4000.0)
+        if self._livello > SILENZIO:
+            self._ultimo_suono = time.time()
 
     @staticmethod
     def _spegni_stream(stream):
@@ -527,7 +562,43 @@ class App(rumps.App):
         except Exception:
             pass
 
+    def _ciclo_anteprima(self):
+        """Manda a Whisper i pezzi già pronunciati, mentre continui a parlare."""
+        indice = 0
+        while self._ciclo_vivo:
+            time.sleep(0.25)
+            pezzi = self._pezzi[indice:]
+            if not pezzi:
+                continue
+            durata = sum(len(p) for p in pezzi) / FREQUENZA
+            if durata < BLOCCO_MIN:
+                continue
+            in_pausa = (time.time() - self._ultimo_suono) > PAUSA
+            if not in_pausa and durata < BLOCCO_MAX:
+                continue
+            indice += len(pezzi)
+            pezzo = self._trascrivi_blocco(pezzi)
+            if pezzo:
+                self._anteprima = (self._anteprima + " " + pezzo).strip()
+                self._eventi.put(("anteprima", self._anteprima))
+
+    def _trascrivi_blocco(self, pezzi) -> str:
+        f = Path(tempfile.gettempdir()) / f"anteprima-{int(time.time() * 1000)}.flac"
+        try:
+            sf.write(f, np.concatenate(pezzi), FREQUENZA, format="FLAC")
+            # a Whisper si passa la coda di quanto già trascritto: gli fa da
+            # contesto e cuce meglio il punto di attacco fra un blocco e l'altro
+            contesto = self._anteprima[-260:] if self._anteprima else ", ".join(self.vocabolario[:40])
+            grezzo = self.groq.trascrivi(f, contesto)
+            return applica_correzioni(grezzo.strip(), self.correzioni)
+        except Exception as e:
+            print(f"anteprima saltata: {e}", file=sys.stderr)
+            return ""
+        finally:
+            f.unlink(missing_ok=True)
+
     def _ferma(self):
+        self._ciclo_vivo = False
         self.registrando = False
         self._livello = 0.0
         stream, self._stream = self._stream, None
@@ -539,10 +610,7 @@ class App(rumps.App):
             self._stato, self._etichetta = PRONTO, "troppo corto: riprova"
             return
         self._stato, self._etichetta = ELABORA, "trascrivo…"
-        if self._pannello is not None and self._pannello.e_aperto():
-            precedente = self._pannello.testo_corrente()   # comprese le correzioni a mano
-        else:
-            precedente = self._ultimo
+        precedente = self._testo_fisso
         threading.Thread(
             target=self._elabora, args=(pezzi, secondi, precedente), daemon=True
         ).start()

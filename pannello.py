@@ -11,6 +11,11 @@ from __future__ import annotations
 import objc
 from AppKit import (
     NSApp,
+    NSAttributedString,
+    NSFontAttributeName,
+    NSForegroundColorAttributeName,
+    NSBezierPath,
+    NSTimer,
     NSBackingStoreBuffered,
     NSFloatingWindowLevel,
     NSPanel,
@@ -19,7 +24,6 @@ from AppKit import (
     NSWindowStyleMaskTitled,
     NSWindowStyleMaskUtilityWindow,
     NSWindowTitleHidden,
-    NSBezierPath,
     NSButton,
     NSCenterTextAlignment,
     NSColor,
@@ -162,6 +166,58 @@ class BottoneRec(NSView):
             ).fill()
 
 
+class Conferma(NSView):
+    """Il lampo blu dopo «Copia»: un bordo e un velo che sfumano in mezzo secondo.
+
+    Non è decorazione: è la risposta alla domanda «l'ha preso davvero?», data
+    senza far sparire la finestra e senza scrivere altre parole da leggere.
+    """
+
+    @objc.python_method
+    def prepara(self):
+        self.forza = 0.0
+        self.timer = None
+        return self
+
+    def hitTest_(self, _punto):
+        return None          # trasparente ai clic: sta sopra a tutto
+
+    @objc.python_method
+    def lampeggia(self):
+        self.forza = 1.0
+        self.setHidden_(False)
+        self.setNeedsDisplay_(True)
+        if self.timer is not None:
+            self.timer.invalidate()
+        self.timer = NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
+            1.0 / 60, True, self._passo
+        )
+
+    @objc.python_method
+    def _passo(self, timer):
+        self.forza -= 0.028
+        if self.forza <= 0:
+            self.forza = 0.0
+            self.setHidden_(True)
+            timer.invalidate()
+            self.timer = None
+        self.setNeedsDisplay_(True)
+
+    def drawRect_(self, _r):
+        if self.forza <= 0:
+            return
+        blu = NSColor.controlAccentColor()
+        b = self.bounds()
+        cornice = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            NSMakeRect(2, 2, b.size.width - 4, b.size.height - 4), 9, 9
+        )
+        blu.colorWithAlphaComponent_(self.forza * 0.10).setFill()
+        cornice.fill()
+        blu.colorWithAlphaComponent_(self.forza * 0.85).setStroke()
+        cornice.setLineWidth_(3)
+        cornice.stroke()
+
+
 class Pannello(NSObject):
     @objc.python_method
     def inizializza(self, app):
@@ -174,6 +230,7 @@ class Pannello(NSObject):
         self.scroll = None
         self.b_copia = None
         self.b_svuota = None
+        self.conferma = None
         self.titolo = None
         self.menu_btn = None
         self.testo_mostrato = ""
@@ -246,6 +303,10 @@ class Pannello(NSObject):
         self.b_svuota = NSButton.buttonWithTitle_target_action_("Svuota", self, "svuota:")
         vista.addSubview_(self.b_svuota)
 
+        self.conferma = Conferma.alloc().initWithFrame_(vista.bounds()).prepara()
+        self.conferma.setHidden_(True)
+        vista.addSubview_(self.conferma)
+
         stile = (NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
                  | NSWindowStyleMaskUtilityWindow | NSWindowStyleMaskFullSizeContentView)
         self.finestra = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
@@ -295,6 +356,7 @@ class Pannello(NSObject):
         self.titolo.setFrame_(NSMakeRect(BORDO + 40, y_titolo, largo - 80, 18))
         self.menu_btn.setFrame_(NSMakeRect(LARGO - BORDO - 32, y_titolo - 2, 32, 20))
 
+        self.conferma.setFrame_(NSMakeRect(0, 0, LARGO, H))
         self.testo_mostrato = testo
         cornice = self.finestra.frameRectForContentRect_(NSMakeRect(0, 0, LARGO, H))
         ora = self.finestra.frame()
@@ -326,6 +388,38 @@ class Pannello(NSObject):
             self.testo_view.setString_(testo)
             if testo:
                 self.testo_view.scrollRangeToVisible_((len(testo), 0))
+
+    @objc.python_method
+    def _pezzo(self, testo: str, colore):
+        return NSAttributedString.alloc().initWithString_attributes_(
+            testo,
+            {NSForegroundColorAttributeName: colore,
+             NSFontAttributeName: NSFont.systemFontOfSize_(12.5)},
+        )
+
+    @objc.python_method
+    def mostra_anteprima(self, fisso: str, provvisorio: str):
+        """Il già acquisito in nero, quello che sta arrivando in grigio.
+
+        Il colore dice da solo cos'è definitivo e cosa verrà riscritto quando
+        la registrazione finisce: non serve spiegarlo a parole.
+        """
+        separatore = "\n\n" if (fisso.strip() and provvisorio) else ""
+        intero = fisso + separatore + provvisorio
+        if self._altezza(intero) != self._altezza(self.testo_mostrato):
+            self._disponi(intero)          # ridimensiona solo se serve davvero
+        else:
+            self.testo_mostrato = intero
+
+        deposito = self.testo_view.textStorage()
+        deposito.beginEditing()
+        deposito.setAttributedString_(self._pezzo(fisso, NSColor.labelColor()))
+        if provvisorio:
+            deposito.appendAttributedString_(
+                self._pezzo(separatore + provvisorio, NSColor.secondaryLabelColor())
+            )
+        deposito.endEditing()
+        self.testo_view.scrollRangeToVisible_((len(intero), 0))
 
     @objc.python_method
     def testo_corrente(self) -> str:
@@ -376,6 +470,22 @@ class Pannello(NSObject):
             self.apri()
 
     # -- azioni (selettori Objective-C) ---------------------------------------
+    @objc.python_method
+    def segnala_copia(self):
+        """Lampo blu + il bottone che si dichiara, per un secondo e mezzo."""
+        self.conferma.lampeggia()
+        self.b_copia.setTitle_("✓ Copiato")
+        self.b_copia.setBezelColor_(NSColor.controlAccentColor())
+        NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
+            1.5, False, lambda _t: self._ripristina_copia()
+        )
+
+    @objc.python_method
+    def _ripristina_copia(self):
+        if self.b_copia is not None:
+            self.b_copia.setTitle_("Copia")
+            self.b_copia.setBezelColor_(None)
+
     def copia_(self, _s):
         self.app.copia_dal_pannello()
 
