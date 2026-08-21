@@ -8,18 +8,27 @@ Icona nella barra dei menu. **⌘⇧D** per iniziare, **⌘⇧D** per finire: il
      registra              Groq Whisper + pulitura      appunti
 ```
 
-## Accendere (3 passi, una volta sola)
+## Accendere
 
-1. **La chiave Groq** — gratis su <https://console.groq.com/keys>, poi scrivila in `.env`:
-   ```
-   GROQ_API_KEY=gsk_...
-   ```
-2. **Avvia** `Dettatura.app` (doppio clic). Compare 🎙 in alto a destra.
-3. **Concedi due permessi** quando li chiede — Impostazioni di Sistema → Privacy e sicurezza:
-   - **Microfono** → Dettatura
-   - **Monitoraggio input** → Dettatura *(serve alla scorciatoia globale; senza, usi il menu)*
+L'app è già installata in **/Applications/Dettatura.app**. Doppio clic: compare 🎙
+in alto a destra, e basta.
 
-Per averla sempre: Impostazioni → Generali → Elementi login → **+** → `Dettatura.app`.
+Alla prima dettatura macOS chiede due permessi — Impostazioni di Sistema → Privacy e sicurezza:
+
+| Permesso | Serve a | Se lo neghi |
+|---|---|---|
+| **Microfono** | registrare | non funziona niente |
+| **Monitoraggio input** | la scorciatoia ⌘⇧D | usi il menu 🎙 → *Inizia a dettare* |
+
+Per averla sempre pronta: Impostazioni → Generali → Elementi login → **+** → Dettatura.
+
+### Se qualcosa sembra non partire
+
+```bash
+/Applications/Dettatura.app/Contents/MacOS/Dettatura --check
+```
+Dice in cinque righe dove sta guardando, quante regole ha caricato, se la chiave è valida
+e quale modello userà. È il primo comando da lanciare quando qualcosa non torna.
 
 ## Le tre modalità
 
@@ -36,6 +45,16 @@ Per averla sempre: Impostazioni → Generali → Elementi login → **+** → `D
 
 **Se sbaglia un nome, aggiungilo lì** (menu → *Apri il vocabolario*) e riparte corretto dalla volta dopo.
 Nessun riavvio: il file viene riletto all'avvio dell'app.
+
+## Modificare vocabolario e correzioni
+
+Vivono **fuori** dal bundle, in `~/Progetti/dettatura/`, quindi si toccano senza ricompilare:
+salvi il file e riparte corretto al prossimo avvio dell'app.
+
+Si ricompila solo dopo aver cambiato `dettatura.py`:
+```bash
+./installa.sh
+```
 
 ## Provare senza microfono
 
@@ -64,7 +83,8 @@ DETTATURA_HOTKEY=<ctrl>+<alt>+d
 
 | Sintomo | Causa |
 |---|---|
-| ⚠️ nella barra | apri `storico.md`? no: guarda il Terminale — l'errore è stampato lì. Di solito chiave scaduta |
+| ⚠️ nella barra | lancia `--check` (sopra): quasi sempre è la chiave Groq scaduta |
+| Non vedo l'icona 🎙 | la barra è piena e macOS la nasconde: togli qualche icona, o su Mac col notch riduci gli elementi. `pgrep -f Dettatura` dice se sta girando |
 | La scorciatoia non fa niente | manca *Monitoraggio input*. Intanto usa il menu → *Inizia a dettare* |
 | «Microfono non disponibile» | manca il permesso Microfono, o un'altra app lo tiene occupato |
 | Trascrive in inglese | il dettato era troppo corto: Whisper indovina la lingua sui primi secondi |

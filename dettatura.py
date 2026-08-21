@@ -27,11 +27,42 @@ import sounddevice as sd
 import soundfile as sf
 from pynput import keyboard
 
-BASE = Path(__file__).resolve().parent
+def _cartelle() -> tuple[Path, Path]:
+    """(risorse di sola lettura, cartella dei file che Reda modifica).
+
+    Dentro un .app il codice è sigillato: vocabolario, correzioni e .env devono
+    vivere fuori, altrimenti non si potrebbero più toccare (e sparirebbero a
+    ogni ricompilazione).
+    """
+    if getattr(sys, "frozen", False):
+        risorse = Path(sys._MEIPASS)
+        dati = Path.home() / "Progetti" / "dettatura"
+        if not dati.is_dir():
+            dati = Path.home() / "Library" / "Application Support" / "Dettatura"
+        dati.mkdir(parents=True, exist_ok=True)
+    else:
+        risorse = dati = Path(__file__).resolve().parent
+    return risorse, dati
+
+
+RISORSE, BASE = _cartelle()
 VOCABOLARIO = BASE / "vocabolario.txt"
 CORREZIONI = BASE / "correzioni.txt"
 STORICO = BASE / "storico.md"
 ENV = BASE / ".env"
+
+
+def _primo_avvio() -> None:
+    """Al primo avvio da .app, semina i file di configurazione se mancano."""
+    if RISORSE == BASE:
+        return
+    for nome in ("vocabolario.txt", "correzioni.txt"):
+        origine, destinazione = RISORSE / nome, BASE / nome
+        if origine.exists() and not destinazione.exists():
+            destinazione.write_text(origine.read_text(encoding="utf-8"), encoding="utf-8")
+    if not ENV.exists():
+        ENV.write_text("GROQ_API_KEY=\nDETTATURA_HOTKEY=<cmd>+<shift>+d\nDETTATURA_LLM=\n", encoding="utf-8")
+        ENV.chmod(0o600)
 
 API = "https://api.groq.com/openai/v1"
 MODELLO_STT = "whisper-large-v3-turbo"
@@ -393,5 +424,30 @@ class App(rumps.App):
             threading.Timer(4.0, lambda: self._eventi.put(("pronto", "🎙"))).start()
 
 
+def _autodiagnosi() -> int:
+    """`Dettatura --check`: dice dove guarda e se è tutto a posto, senza aprire nulla."""
+    _primo_avvio()
+    cfg = carica_env()
+    chiave = cfg.get("GROQ_API_KEY", "")
+    print(f"risorse    : {RISORSE}")
+    print(f"dati       : {BASE}")
+    print(f"vocabolario: {len(carica_vocabolario())} voci   ({'ok' if VOCABOLARIO.exists() else 'MANCA'})")
+    print(f"correzioni : {len(carica_correzioni())} regole  ({'ok' if CORREZIONI.exists() else 'MANCA'})")
+    print(f"chiave Groq: {'presente (…' + chiave[-6:] + ')' if chiave else 'MANCANTE'}")
+    if not chiave:
+        return 1
+    try:
+        g = Groq(chiave, cfg.get("DETTATURA_LLM", ""))
+        print(f"modello    : {g.llm()}")
+    except Exception as e:
+        print(f"modello    : ERRORE — {e}")
+        return 1
+    print("tutto a posto.")
+    return 0
+
+
 if __name__ == "__main__":
+    if "--check" in sys.argv:
+        sys.exit(_autodiagnosi())
+    _primo_avvio()
     App().run()
