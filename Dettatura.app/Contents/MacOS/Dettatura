@@ -1,0 +1,5 @@
+#!/bin/bash
+# Avvia l'app dalla cartella del progetto: il bundle serve a farsi dare
+# da macOS i permessi (microfono, tasti) a nome proprio invece che del Terminale.
+cd "$(dirname "$0")/../../.." || exit 1
+exec ./.venv/bin/python dettatura.py
