@@ -27,6 +27,8 @@ import sounddevice as sd
 import soundfile as sf
 from pynput import keyboard
 
+from pannello import Pannello
+
 def _cartelle() -> tuple[Path, Path]:
     """(risorse di sola lettura, cartella dei file che Reda modifica).
 
@@ -274,6 +276,8 @@ class App(rumps.App):
         self._inizio = 0.0
         self._ultimo = ""
         self._eventi: queue.Queue = queue.Queue()
+        self._pannello: Pannello | None = None
+        self._da_mostrare: tuple[str, str] | None = None
         self._stato = ("pronto", "🎙")
 
         self.m_azione = rumps.MenuItem("Inizia a dettare", callback=self.premuto)
@@ -281,12 +285,12 @@ class App(rumps.App):
         self.m_prompt = rumps.MenuItem("Istruzione per l'agente", callback=self.scegli_modo)
         self.m_grezzo = rumps.MenuItem("Grezzo (senza LLM)", callback=self.scegli_modo)
         self.m_pulito.state = 1
-        self.m_ricopia = rumps.MenuItem("Ricopia l'ultimo", callback=self.ricopia)
+        self.m_rivedi = rumps.MenuItem("Rivedi l'ultimo testo", callback=self.rivedi)
         self.menu = [
             self.m_azione,
             None,
             {"Modalità": [self.m_pulito, self.m_prompt, self.m_grezzo]},
-            self.m_ricopia,
+            self.m_rivedi,
             None,
             rumps.MenuItem("Apri il vocabolario", callback=self.apri_vocabolario),
             rumps.MenuItem("Apri lo storico", callback=self.apri_storico),
@@ -315,10 +319,38 @@ class App(rumps.App):
             if m is item:
                 self.modo = nome
 
-    def ricopia(self, _):
+    def rivedi(self, _=None):
         if self._ultimo:
-            negli_appunti(self._ultimo)
-            self._stato = ("ricopiato", "✅")
+            self._mostra_pannello(self._ultimo, "l'ultima dettatura")
+        else:
+            self._mostra_pannello(
+                "Non hai ancora dettato niente.\n\n"
+                "Premi ⌘⇧D (o scegli «Inizia a dettare» qui sopra), parla, "
+                "e ripremi ⌘⇧D per fermarti.\n\n"
+                "Il testo comparirà qui: puoi correggerlo a mano prima di copiarlo. "
+                "Intanto è già negli appunti.",
+                "così funziona",
+            )
+
+    # -- il pannello che scende dall'icona -----------------------------------
+    def _mostra_pannello(self, testo: str, intestazione: str):
+        if self._pannello is None:
+            self._pannello = Pannello.alloc().init().inizializza(self)
+        self._pannello.mostra(testo, intestazione)
+
+    def copia_dal_pannello(self):
+        """Copia quello che c'è nel pannello ADESSO: se l'hai corretto, vale la correzione."""
+        testo = self._pannello.testo_corrente()
+        if testo.strip():
+            negli_appunti(testo)
+            self._ultimo = testo
+        self._pannello.chiudi()
+        self._stato = ("copiato", "📋")
+        threading.Timer(3.0, lambda: self._eventi.put(("pronto", "🎙"))).start()
+
+    def ridetta_dal_pannello(self):
+        self._pannello.chiudi()
+        self._eventi.put("premuto")
 
     def apri_vocabolario(self, _):
         subprocess.run(["open", "-t", str(VOCABOLARIO)])
@@ -335,6 +367,14 @@ class App(rumps.App):
                 self._alterna()
             elif isinstance(ev, tuple):
                 self._stato = ev
+        if self._da_mostrare is not None:
+            testo, intestazione = self._da_mostrare
+            self._da_mostrare = None
+            try:
+                self._mostra_pannello(testo, intestazione)
+            except Exception as e:
+                print(f"pannello non mostrato: {e}", file=sys.stderr)
+
         if self.registrando:
             s = int(time.time() - self._inizio)
             self.title = f"🔴 {s // 60}:{s % 60:02d}"
@@ -414,6 +454,11 @@ class App(rumps.App):
             self._ultimo = testo
             scrivi_storico(grezzo, testo, self.modo, secondi)
             parole = len(testo.split())
+            nome_modo = {"pulito": "testo pulito", "prompt": "istruzione", "grezzo": "grezzo"}[self.modo]
+            self._da_mostrare = (
+                testo,
+                f"{parole} parole · {nome_modo} · {secondi:.0f}s dettati · già negli appunti",
+            )
             self._eventi.put((f"{parole} parole", "✅"))
         except Exception as e:
             self._ultimo = ""

@@ -4,9 +4,22 @@ Icona nella barra dei menu. **⌘⇧D** per iniziare, **⌘⇧D** per finire: il
 è già negli appunti, pronto per ⌘V in Warp.
 
 ```
-🎙  ⌘⇧D  →  🔴 0:42  ⌘⇧D  →  ⏳  →  ✅ 137 parole  →  ⌘V
-     registra              Groq Whisper + pulitura      appunti
+🎙  ⌘⇧D  →  🔴 0:42  ⌘⇧D  →  ⏳  →  ┌──────────────────────────┐
+     registra          trascrive    │ 137 parole · testo pulito│
+                                    │                          │
+                                    │ Per Acmelux dobbiamo    │
+                                    │ chiudere i sei bloccanti…│
+                                    │                          │
+                                    │ [Ridetta]        [Copia] │
+                                    └──────────────────────────┘
 ```
+
+Il pannello scende dall'icona a fine dettatura: **leggi quello che hai detto**,
+lo correggi a mano se serve, e **Copia** (o Invio) manda negli appunti la versione
+che vedi. Il testo è già negli appunti comunque: il pannello serve a controllarlo
+prima di incollarlo in Warp.
+
+Riaprirlo dopo: menu 🎙 → *Rivedi l'ultimo testo*.
 
 ## Accendere
 
