@@ -335,8 +335,15 @@ class App(rumps.App):
         ]
 
         scorciatoia = self.cfg.get("DETTATURA_HOTKEY", "<cmd>+<shift>+d")
+        uscita = self.cfg.get("DETTATURA_USCITA", "<cmd>+<shift>+<alt>+q")
         try:
-            keyboard.GlobalHotKeys({scorciatoia: self._da_scorciatoia}).start()
+            # l'ascolto dei tasti gira su un thread suo: la scorciatoia di
+            # emergenza funziona anche se il thread principale è bloccato,
+            # e os._exit non passa dal run loop (che potrebbe essere fermo).
+            keyboard.GlobalHotKeys({
+                scorciatoia: self._da_scorciatoia,
+                uscita: self._uscita_di_emergenza,
+            }).start()
         except Exception as e:
             print(f"scorciatoia non attivata: {e}", file=sys.stderr)
 
@@ -362,6 +369,10 @@ class App(rumps.App):
     # -- ingressi -------------------------------------------------------------
     def _da_scorciatoia(self):
         self._eventi.put("premuto")
+
+    def _uscita_di_emergenza(self):
+        print("uscita di emergenza", file=sys.stderr)
+        os._exit(1)
 
     def dal_bottone(self):
         """Il tondo rosso dentro il pannello."""
@@ -498,23 +509,45 @@ class App(rumps.App):
         forza = float(np.sqrt(np.mean(dati.astype(np.float32) ** 2)))
         self._livello = min(1.0, forza / 4000.0)
 
+    @staticmethod
+    def _spegni_stream(stream):
+        """Fuori dal thread principale, sempre.
+
+        stop() aspetta che il callback audio termini, e il callback aspetta il
+        GIL: se a chiamarlo è il thread che tiene il GIL, CoreAudio non torna
+        più indietro e l'app si pianta senza possibilità di chiuderla.
+        abort() chiude di netto, senza aspettare di svuotare il buffer.
+        """
+        try:
+            stream.abort(ignore_errors=True)
+        except Exception:
+            pass
+        try:
+            stream.close(ignore_errors=True)
+        except Exception:
+            pass
+
     def _ferma(self):
         self.registrando = False
         self._livello = 0.0
-        try:
-            self._stream.stop()
-            self._stream.close()
-        except Exception:
-            pass
+        stream, self._stream = self._stream, None
+        if stream is not None:
+            threading.Thread(target=self._spegni_stream, args=(stream,), daemon=True).start()
         secondi = time.time() - self._inizio
         pezzi, self._pezzi = self._pezzi, []
         if not pezzi or secondi < 0.6:
             self._stato, self._etichetta = PRONTO, "troppo corto: riprova"
             return
         self._stato, self._etichetta = ELABORA, "trascrivo…"
-        threading.Thread(target=self._elabora, args=(pezzi, secondi), daemon=True).start()
+        if self._pannello is not None and self._pannello.e_aperto():
+            precedente = self._pannello.testo_corrente()   # comprese le correzioni a mano
+        else:
+            precedente = self._ultimo
+        threading.Thread(
+            target=self._elabora, args=(pezzi, secondi, precedente), daemon=True
+        ).start()
 
-    def _elabora(self, pezzi, secondi: float):
+    def _elabora(self, pezzi, secondi: float, precedente: str = ""):
         audio = Path(tempfile.gettempdir()) / f"dettatura-{int(time.time())}.flac"
         try:
             sf.write(audio, np.concatenate(pezzi), FREQUENZA, format="FLAC")
@@ -535,14 +568,19 @@ class App(rumps.App):
                     self.groq.ripulisci(grezzo, self.modo, self.vocabolario), self.correzioni
                 )
 
-            negli_appunti(testo)
-            self._ultimo = testo
-            scrivi_storico(grezzo, testo, self.modo, secondi)
+            # le dettature si accumulano: la seconda va in coda alla prima
+            in_coda = bool(precedente.strip())
+            totale = (precedente.rstrip() + "\n\n" + testo) if in_coda else testo
+
+            negli_appunti(totale)
+            self._ultimo = totale
+            scrivi_storico(grezzo, testo, self.modo, secondi)   # nello storico solo il pezzo nuovo
             parole = len(testo.split())
+            coda = " · aggiunte in coda" if in_coda else ""
             self._eventi.put((
                 PRONTO,
-                f"{parole} parole · {NOMI_MODO[self.modo]} · già negli appunti",
-                testo,
+                f"{parole} parole{coda} · negli appunti",
+                totale,
             ))
         except Exception as e:
             print(f"errore: {e}", file=sys.stderr)

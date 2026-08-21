@@ -21,7 +21,10 @@ Icona nella barra dei menu. **⌘⇧D** per iniziare, **⌘⇧D** per finire: il
    └────────────────────────────────┘
 ```
 
-**Clic sull'icona** = apre il pannello. **Clic destro** = il menu.
+**Clic sull'icona** = apre la finestra. **Clic destro** = il menu.
+
+La finestra **resta dove la metti**: si trascina da qualsiasi punto, sta sopra le
+altre e non sparisce quando passi a Warp. Tienila di fianco al terminale.
 Il tondo rosso e ⌘⇧D fanno la stessa cosa: partire e fermarsi.
 
 Mentre registri, attorno al bottone si allarga un alone che segue la tua voce —
@@ -29,8 +32,11 @@ serve a vedere a colpo d'occhio che il microfono sta prendendo davvero qualcosa.
 Il pannello resta aperto finché registri, e ti mostra il tempo che scorre.
 
 A fine dettatura il testo compare lì: lo leggi, lo correggi se serve, e **Copia**
-(o Invio) manda negli appunti la versione che vedi. È già negli appunti comunque:
-il pannello serve a controllarlo prima di incollarlo in Warp.
+(o Invio) manda negli appunti la versione che vedi. È già negli appunti comunque.
+
+**Le dettature si accumulano**: la seconda va in coda alla prima, separata da una
+riga vuota — puoi dettare un pensiero, fermarti, pensare, e riprendere. Negli
+appunti finisce sempre il testo completo. **Svuota** ricomincia da capo.
 
 ## Accendere
 
@@ -103,6 +109,14 @@ In `.env`, sintassi pynput:
 DETTATURA_HOTKEY=<ctrl>+<alt>+d
 ```
 
+## Se si blocca
+
+**⌘⇧⌥Q la chiude sempre**, anche se è piantata: l'ascolto dei tasti gira su un
+thread suo, quindi risponde anche quando il resto è fermo. Serve perché un'app
+della barra dei menu **non compare nell'elenco «Uscita forzata»**.
+
+Da terminale: `~/Progetti/dettatura/ferma.sh`
+
 ## Se qualcosa non va
 
 | Sintomo | Causa |
@@ -112,6 +126,7 @@ DETTATURA_HOTKEY=<ctrl>+<alt>+d
 | La scorciatoia non fa niente | manca *Monitoraggio input*. Intanto usa il menu → *Inizia a dettare* |
 | «Microfono non disponibile» | manca il permesso Microfono, o un'altra app lo tiene occupato |
 | Trascrive in inglese | il dettato era troppo corto: Whisper indovina la lingua sui primi secondi |
+| Si blocca fermando la registrazione | non dovrebbe più: lo stream audio si chiude fuori dal thread principale. Se succede, ⌘⇧⌥Q e scrivimi cosa stavi facendo |
 
 ## Costi
 

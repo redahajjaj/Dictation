@@ -1,6 +1,7 @@
 """
-Il pannello che scende dall'icona: bottone di registrazione al centro, il testo
-sotto, e nient'altro. Si apre con un clic sull'icona nella barra.
+La finestra della dettatura: bottone di registrazione al centro, il testo sotto.
+Si apre con un clic sull'icona e resta dove la metti — si trascina da qualsiasi
+punto e non sparisce quando lavori altrove, così puoi tenerla di fianco a Warp.
 
 Tutti i colori vengono dal sistema (labelColor, systemRed…), così il pannello
 segue da solo il tema chiaro e scuro senza che qui ci sia una sola tinta fissa.
@@ -10,6 +11,14 @@ from __future__ import annotations
 import objc
 from AppKit import (
     NSApp,
+    NSBackingStoreBuffered,
+    NSFloatingWindowLevel,
+    NSPanel,
+    NSWindowStyleMaskClosable,
+    NSWindowStyleMaskFullSizeContentView,
+    NSWindowStyleMaskTitled,
+    NSWindowStyleMaskUtilityWindow,
+    NSWindowTitleHidden,
     NSBezierPath,
     NSButton,
     NSCenterTextAlignment,
@@ -22,11 +31,7 @@ from AppKit import (
     NSMakePoint,
     NSMakeRect,
     NSMakeSize,
-    NSMinYEdge,
     NSNoBorder,
-    NSPopover,
-    NSPopoverBehaviorApplicationDefined,
-    NSPopoverBehaviorTransient,
     NSScrollView,
     NSTextField,
     NSTextView,
@@ -161,7 +166,7 @@ class Pannello(NSObject):
     @objc.python_method
     def inizializza(self, app):
         self.app = app
-        self.popover = None
+        self.finestra = None
         self.vista = None
         self.bottone = None
         self.etichetta_stato = None
@@ -196,6 +201,7 @@ class Pannello(NSObject):
 
         self.titolo = NSTextField.labelWithString_("Dettatura")
         self.titolo.setFont_(NSFont.systemFontOfSize_weight_(13, NSFontWeightSemibold))
+        self.titolo.setAlignment_(NSCenterTextAlignment)
         vista.addSubview_(self.titolo)
 
         self.menu_btn = NSButton.buttonWithTitle_target_action_("•••", self, "apriMenu:")
@@ -240,12 +246,19 @@ class Pannello(NSObject):
         self.b_svuota = NSButton.buttonWithTitle_target_action_("Svuota", self, "svuota:")
         vista.addSubview_(self.b_svuota)
 
-        controller = NSViewController.alloc().init()
-        controller.setView_(vista)
-        self.popover = NSPopover.alloc().init()
-        self.popover.setContentViewController_(controller)
-        self.popover.setBehavior_(NSPopoverBehaviorTransient)
-        self.popover.setAnimates_(True)
+        stile = (NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+                 | NSWindowStyleMaskUtilityWindow | NSWindowStyleMaskFullSizeContentView)
+        self.finestra = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+            NSMakeRect(0, 0, LARGO, 200), stile, NSBackingStoreBuffered, False
+        )
+        self.finestra.setTitleVisibility_(NSWindowTitleHidden)
+        self.finestra.setTitlebarAppearsTransparent_(True)
+        self.finestra.setMovableByWindowBackground_(True)   # si trascina da ovunque
+        self.finestra.setLevel_(NSFloatingWindowLevel)      # resta sopra le altre
+        self.finestra.setHidesOnDeactivate_(False)
+        # senza questo, chiuderla la distrugge e riaprirla fa crashare l'app
+        self.finestra.setReleasedWhenClosed_(False)
+        self.finestra.setContentView_(vista)
 
     @objc.python_method
     def _disponi(self, testo: str):
@@ -279,16 +292,23 @@ class Pannello(NSObject):
         )
 
         y_titolo = base_cerchio + REC + 16
-        self.titolo.setFrame_(NSMakeRect(BORDO, y_titolo, 160, 18))
+        self.titolo.setFrame_(NSMakeRect(BORDO + 40, y_titolo, largo - 80, 18))
         self.menu_btn.setFrame_(NSMakeRect(LARGO - BORDO - 32, y_titolo - 2, 32, 20))
 
         self.testo_mostrato = testo
-        self.popover.setContentSize_(NSMakeSize(LARGO, H))
+        cornice = self.finestra.frameRectForContentRect_(NSMakeRect(0, 0, LARGO, H))
+        ora = self.finestra.frame()
+        alto = ora.origin.y + ora.size.height          # il bordo superiore non si muove:
+        self.finestra.setFrame_display_(                # la finestra cresce verso il basso
+            NSMakeRect(ora.origin.x, alto - cornice.size.height,
+                       cornice.size.width, cornice.size.height),
+            True,
+        )
 
     # -- aggiornamenti dallo stato dell'app -----------------------------------
     @objc.python_method
     def aggiorna(self, stato: str, etichetta: str, livello: float = 0.0):
-        if self.popover is None:
+        if self.finestra is None:
             return
         self.bottone.stato = stato
         self.bottone.livello = livello
@@ -296,19 +316,16 @@ class Pannello(NSObject):
             self.bottone.giro = (self.bottone.giro - 26) % 360
         self.bottone.setNeedsDisplay_(True)
         self.etichetta_stato.setStringValue_(etichetta)
-        # mentre registra il pannello non deve sparire al primo clic altrove
-        self.popover.setBehavior_(
-            NSPopoverBehaviorApplicationDefined if stato == REGISTRA
-            else NSPopoverBehaviorTransient
-        )
 
     @objc.python_method
     def imposta_testo(self, testo: str):
-        if self.popover is None:
+        if self.finestra is None:
             self._costruisci()
         if testo != self.testo_mostrato:
             self._disponi(testo)
             self.testo_view.setString_(testo)
+            if testo:
+                self.testo_view.scrollRangeToVisible_((len(testo), 0))
 
     @objc.python_method
     def testo_corrente(self) -> str:
@@ -317,27 +334,39 @@ class Pannello(NSObject):
     # -- apertura / chiusura --------------------------------------------------
     @objc.python_method
     def e_aperto(self) -> bool:
-        return self.popover is not None and self.popover.isShown()
+        return self.finestra is not None and self.finestra.isVisible()
+
+    @objc.python_method
+    def _sotto_icona(self):
+        """Solo la prima volta: dopo, la finestra resta dove l'hai lasciata."""
+        bottone_barra = self.app._nsapp.nsstatusitem.button()
+        if bottone_barra is None or bottone_barra.window() is None:
+            return
+        r = bottone_barra.window().convertRectToScreen_(bottone_barra.frame())
+        f = self.finestra.frame()
+        self.finestra.setFrameOrigin_(
+            NSMakePoint(r.origin.x + r.size.width / 2 - f.size.width / 2,
+                        r.origin.y - f.size.height - 6)
+        )
 
     @objc.python_method
     def apri(self, testo: str | None = None):
-        if self.popover is None:
+        prima_volta = self.finestra is None
+        if prima_volta:
             self._costruisci()
             self._disponi(testo or "")
         if testo is not None:
             self.imposta_testo(testo)
-        bottone_barra = self.app._nsapp.nsstatusitem.button()
-        if bottone_barra is None:
-            return
-        self.popover.showRelativeToRect_ofView_preferredEdge_(
-            bottone_barra.bounds(), bottone_barra, NSMinYEdge
-        )
+        if prima_volta and not self.finestra.setFrameUsingName_("finestra-dettatura"):
+            self._sotto_icona()
+        self.finestra.makeKeyAndOrderFront_(None)
+        self.finestra.setFrameAutosaveName_("finestra-dettatura")
         NSApp.activateIgnoringOtherApps_(True)
 
     @objc.python_method
     def chiudi(self):
-        if self.popover is not None:
-            self.popover.close()
+        if self.finestra is not None:
+            self.finestra.orderOut_(None)
 
     @objc.python_method
     def alterna(self):
