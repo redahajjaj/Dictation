@@ -21,13 +21,44 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import requests
 import rumps
 import sounddevice as sd
 import soundfile as sf
+from AppKit import (
+    NSApp,
+    NSEventMaskLeftMouseUp,
+    NSEventMaskRightMouseUp,
+    NSEventModifierFlagControl,
+    NSEventTypeRightMouseUp,
+    NSMakePoint,
+)
+from Foundation import NSObject
+import objc
 from pynput import keyboard
 
-from pannello import Pannello
+from pannello import ELABORA, PRONTO, REGISTRA, Pannello
+
+
+class ClicIcona(NSObject):
+    """Il clic sull'icona apre il pannello; col destro esce il menu."""
+
+    @objc.python_method
+    def collega(self, app):
+        self.app = app
+        return self
+
+    def clic_(self, _sender):
+        evento = NSApp.currentEvent()
+        destro = evento is not None and (
+            evento.type() == NSEventTypeRightMouseUp
+            or (evento.modifierFlags() & NSEventModifierFlagControl)
+        )
+        if destro:
+            self.app.mostra_menu()
+        else:
+            self.app.alterna_pannello()
 
 def _cartelle() -> tuple[Path, Path]:
     """(risorse di sola lettura, cartella dei file che Reda modifica).
@@ -261,6 +292,11 @@ def scrivi_storico(grezzo: str, pulito: str, modo: str, secondi: float) -> None:
         f.write(voce)
 
 
+ICONE = {PRONTO: "🎙", ELABORA: "⏳"}
+NOMI_MODO = {"pulito": "testo pulito", "prompt": "istruzione", "grezzo": "grezzo"}
+INVITO = "premi il tondo, o ⌘⇧D"
+
+
 class App(rumps.App):
     def __init__(self):
         super().__init__("🎙", quit_button=None)
@@ -276,22 +312,22 @@ class App(rumps.App):
         self._inizio = 0.0
         self._ultimo = ""
         self._eventi: queue.Queue = queue.Queue()
+        self._stato = PRONTO
+        self._etichetta = INVITO
+        self._livello = 0.0
         self._pannello: Pannello | None = None
-        self._da_mostrare: tuple[str, str] | None = None
-        self._stato = ("pronto", "🎙")
+        self._clic = None
+        self._icona_agganciata = False
 
-        self.m_azione = rumps.MenuItem("Inizia a dettare", callback=self.premuto)
+        # il menu ora è secondario: si apre col tasto destro sull'icona o dal •••
         self.m_pulito = rumps.MenuItem("Testo pulito", callback=self.scegli_modo)
         self.m_prompt = rumps.MenuItem("Istruzione per l'agente", callback=self.scegli_modo)
         self.m_grezzo = rumps.MenuItem("Grezzo (senza LLM)", callback=self.scegli_modo)
         self.m_pulito.state = 1
-        self.m_rivedi = rumps.MenuItem("Rivedi l'ultimo testo", callback=self.rivedi)
         self.menu = [
-            self.m_azione,
-            None,
             {"Modalità": [self.m_pulito, self.m_prompt, self.m_grezzo]},
-            self.m_rivedi,
             None,
+            rumps.MenuItem("Apri le correzioni", callback=self.apri_correzioni),
             rumps.MenuItem("Apri il vocabolario", callback=self.apri_vocabolario),
             rumps.MenuItem("Apri lo storico", callback=self.apri_storico),
             None,
@@ -304,13 +340,31 @@ class App(rumps.App):
         except Exception as e:
             print(f"scorciatoia non attivata: {e}", file=sys.stderr)
 
-        rumps.Timer(self._tick, 0.25).start()
+        rumps.Timer(self._tick, 0.1).start()
 
-    # -- la scorciatoia arriva da un altro thread: passa dalla coda, non tocca la UI
+    # -- il clic sull'icona non deve più aprire il menu, ma il pannello --------
+    def _aggancia_icona(self):
+        try:
+            statusitem = self._nsapp.nsstatusitem
+            bottone = statusitem.button()
+            if bottone is None:
+                return
+            statusitem.setMenu_(None)
+            self._clic = ClicIcona.alloc().init().collega(self)
+            bottone.setTarget_(self._clic)
+            bottone.setAction_("clic:")
+            bottone.sendActionOn_(NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp)
+            self._icona_agganciata = True
+        except Exception as e:
+            print(f"icona non agganciata: {e}", file=sys.stderr)
+            self._icona_agganciata = True   # inutile riprovare a ogni giro
+
+    # -- ingressi -------------------------------------------------------------
     def _da_scorciatoia(self):
         self._eventi.put("premuto")
 
-    def premuto(self, _=None):
+    def dal_bottone(self):
+        """Il tondo rosso dentro il pannello."""
         self._eventi.put("premuto")
 
     def scegli_modo(self, item):
@@ -319,24 +373,46 @@ class App(rumps.App):
             if m is item:
                 self.modo = nome
 
-    def rivedi(self, _=None):
-        if self._ultimo:
-            self._mostra_pannello(self._ultimo, "l'ultima dettatura")
-        else:
-            self._mostra_pannello(
-                "Non hai ancora dettato niente.\n\n"
-                "Premi ⌘⇧D (o scegli «Inizia a dettare» qui sopra), parla, "
-                "e ripremi ⌘⇧D per fermarti.\n\n"
-                "Il testo comparirà qui: puoi correggerlo a mano prima di copiarlo. "
-                "Intanto è già negli appunti.",
-                "così funziona",
-            )
+    def apri_vocabolario(self, _):
+        subprocess.run(["open", "-t", str(VOCABOLARIO)])
 
-    # -- il pannello che scende dall'icona -----------------------------------
-    def _mostra_pannello(self, testo: str, intestazione: str):
+    def apri_correzioni(self, _):
+        subprocess.run(["open", "-t", str(CORREZIONI)])
+
+    def apri_storico(self, _):
+        STORICO.touch()
+        subprocess.run(["open", "-t", str(STORICO)])
+
+    # -- pannello -------------------------------------------------------------
+    def _crea_pannello(self) -> Pannello:
         if self._pannello is None:
             self._pannello = Pannello.alloc().init().inizializza(self)
-        self._pannello.mostra(testo, intestazione)
+        return self._pannello
+
+    def alterna_pannello(self):
+        p = self._crea_pannello()
+        if p.e_aperto():
+            p.chiudi()
+            return
+        p.apri(self._ultimo)
+        p.aggiorna(self._stato, self._etichetta, self._livello)
+
+    def mostra_menu(self):
+        """Il menu di rumps, tirato fuori a mano visto che l'icona ora fa altro."""
+        try:
+            nsmenu = self.menu._menu
+            ancora = self._pannello.menu_btn if self._pannello is not None else None
+            if ancora is not None and self._pannello.e_aperto():
+                nsmenu.popUpMenuPositioningItem_atLocation_inView_(
+                    None, NSMakePoint(0, 0), ancora
+                )
+            else:
+                statusitem = self._nsapp.nsstatusitem
+                statusitem.setMenu_(nsmenu)
+                statusitem.button().performClick_(None)
+                statusitem.setMenu_(None)
+        except Exception as e:
+            print(f"menu non mostrato: {e}", file=sys.stderr)
 
     def copia_dal_pannello(self):
         """Copia quello che c'è nel pannello ADESSO: se l'hai corretto, vale la correzione."""
@@ -344,48 +420,49 @@ class App(rumps.App):
         if testo.strip():
             negli_appunti(testo)
             self._ultimo = testo
+        self._stato, self._etichetta = PRONTO, "copiato negli appunti"
+        self._pannello.aggiorna(self._stato, self._etichetta)
         self._pannello.chiudi()
-        self._stato = ("copiato", "📋")
-        threading.Timer(3.0, lambda: self._eventi.put(("pronto", "🎙"))).start()
 
-    def ridetta_dal_pannello(self):
-        self._pannello.chiudi()
-        self._eventi.put("premuto")
+    def svuota_pannello(self):
+        self._ultimo = ""
+        self._pannello.imposta_testo("")
+        self._stato, self._etichetta = PRONTO, INVITO
+        self._pannello.aggiorna(self._stato, self._etichetta)
 
-    def apri_vocabolario(self, _):
-        subprocess.run(["open", "-t", str(VOCABOLARIO)])
-
-    def apri_storico(self, _):
-        STORICO.touch()
-        subprocess.run(["open", "-t", str(STORICO)])
-
-    # -- unico punto che aggiorna la barra: gira sul thread principale
+    # -- il battito: unico posto che tocca la grafica -------------------------
     def _tick(self, _):
+        if not self._icona_agganciata:
+            self._aggancia_icona()
+
+        testo_nuovo = None
         while not self._eventi.empty():
             ev = self._eventi.get()
             if ev == "premuto":
                 self._alterna()
             elif isinstance(ev, tuple):
-                self._stato = ev
-        if self._da_mostrare is not None:
-            testo, intestazione = self._da_mostrare
-            self._da_mostrare = None
-            try:
-                self._mostra_pannello(testo, intestazione)
-            except Exception as e:
-                print(f"pannello non mostrato: {e}", file=sys.stderr)
+                self._stato, self._etichetta = ev[0], ev[1]
+                if len(ev) > 2:
+                    testo_nuovo = ev[2]
 
         if self.registrando:
-            s = int(time.time() - self._inizio)
-            self.title = f"🔴 {s // 60}:{s % 60:02d}"
-            self.m_azione.title = "Ferma e trascrivi"
-            if s >= DURATA_MAX:
+            secondi = int(time.time() - self._inizio)
+            orologio = f"{secondi // 60}:{secondi % 60:02d}"
+            self.title = f"🔴 {orologio}"
+            self._etichetta = f"{orologio}   ·   premi di nuovo per fermare"
+            if secondi >= DURATA_MAX:
                 self._alterna()
         else:
-            testo, icona = self._stato
-            self.title = icona if testo in ("pronto",) else f"{icona} {testo}"
-            self.m_azione.title = "Inizia a dettare"
+            self.title = ICONE.get(self._stato, "🎙")
 
+        if testo_nuovo is not None:
+            p = self._crea_pannello()
+            p.apri(testo_nuovo)            # a fine dettatura il testo si vede subito
+
+        if self._pannello is not None and self._pannello.e_aperto():
+            self._pannello.aggiorna(self._stato, self._etichetta, self._livello)
+
+    # -- registrazione --------------------------------------------------------
     def _alterna(self):
         if self.registrando:
             self._ferma()
@@ -401,10 +478,11 @@ class App(rumps.App):
             )
             return
         self._pezzi = []
+        self._livello = 0.0
         try:
             self._stream = sd.InputStream(
                 samplerate=FREQUENZA, channels=1, dtype="int16",
-                callback=lambda dati, *_: self._pezzi.append(dati.copy()),
+                callback=self._arriva_audio,
             )
             self._stream.start()
         except Exception as e:
@@ -412,9 +490,17 @@ class App(rumps.App):
             return
         self._inizio = time.time()
         self.registrando = True
+        self._stato = REGISTRA
+
+    def _arriva_audio(self, dati, *_):
+        self._pezzi.append(dati.copy())
+        # RMS normalizzato: il parlato normale sta sotto i 4000 su int16
+        forza = float(np.sqrt(np.mean(dati.astype(np.float32) ** 2)))
+        self._livello = min(1.0, forza / 4000.0)
 
     def _ferma(self):
         self.registrando = False
+        self._livello = 0.0
         try:
             self._stream.stop()
             self._stream.close()
@@ -423,21 +509,20 @@ class App(rumps.App):
         secondi = time.time() - self._inizio
         pezzi, self._pezzi = self._pezzi, []
         if not pezzi or secondi < 0.6:
-            self._stato = ("troppo corto", "🎙")
+            self._stato, self._etichetta = PRONTO, "troppo corto: riprova"
             return
-        self._stato = ("...", "⏳")
+        self._stato, self._etichetta = ELABORA, "trascrivo…"
         threading.Thread(target=self._elabora, args=(pezzi, secondi), daemon=True).start()
 
     def _elabora(self, pezzi, secondi: float):
         audio = Path(tempfile.gettempdir()) / f"dettatura-{int(time.time())}.flac"
         try:
-            import numpy as np
             sf.write(audio, np.concatenate(pezzi), FREQUENZA, format="FLAC")
 
             suggerimento = "Dettatura in italiano. Termini ricorrenti: " + ", ".join(self.vocabolario[:60])
             grezzo = self.groq.trascrivi(audio, suggerimento)
             if not grezzo:
-                self._eventi.put(("niente voce", "🎙"))
+                self._eventi.put((PRONTO, "non ho sentito niente"))
                 return
 
             # prima le sostituzioni sicure, così l'LLM legge già i nomi giusti;
@@ -454,19 +539,16 @@ class App(rumps.App):
             self._ultimo = testo
             scrivi_storico(grezzo, testo, self.modo, secondi)
             parole = len(testo.split())
-            nome_modo = {"pulito": "testo pulito", "prompt": "istruzione", "grezzo": "grezzo"}[self.modo]
-            self._da_mostrare = (
+            self._eventi.put((
+                PRONTO,
+                f"{parole} parole · {NOMI_MODO[self.modo]} · già negli appunti",
                 testo,
-                f"{parole} parole · {nome_modo} · {secondi:.0f}s dettati · già negli appunti",
-            )
-            self._eventi.put((f"{parole} parole", "✅"))
+            ))
         except Exception as e:
-            self._ultimo = ""
             print(f"errore: {e}", file=sys.stderr)
-            self._eventi.put(("errore", "⚠️"))
+            self._eventi.put((PRONTO, "errore: guarda il Terminale"))
         finally:
             audio.unlink(missing_ok=True)
-            threading.Timer(4.0, lambda: self._eventi.put(("pronto", "🎙"))).start()
 
 
 def _autodiagnosi() -> int:

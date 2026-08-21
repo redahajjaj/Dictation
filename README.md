@@ -4,22 +4,33 @@ Icona nella barra dei menu. **⌘⇧D** per iniziare, **⌘⇧D** per finire: il
 è già negli appunti, pronto per ⌘V in Warp.
 
 ```
-🎙  ⌘⇧D  →  🔴 0:42  ⌘⇧D  →  ⏳  →  ┌──────────────────────────┐
-     registra          trascrive    │ 137 parole · testo pulito│
-                                    │                          │
-                                    │ Per Acmelux dobbiamo    │
-                                    │ chiudere i sei bloccanti…│
-                                    │                          │
-                                    │ [Ridetta]        [Copia] │
-                                    └──────────────────────────┘
+        🎙  ← un clic sull'icona
+   ┌────────────────────────────────┐
+   │ Dettatura                  ••• │
+   │                                │
+   │             ╭───╮              │
+   │            ( ● )               │  ← il tondo rosso: premi e parla
+   │             ╰───╯              │     (diventa ■ mentre registra)
+   │       premi il tondo, o ⌘⇧D    │
+   │                                │
+   │ ┌────────────────────────────┐ │
+   │ │ Per Acmelux dobbiamo      │ │  ← il testo, correggibile
+   │ │ chiudere i sei bloccanti…  │ │
+   │ └────────────────────────────┘ │
+   │ [Svuota]              [Copia]  │
+   └────────────────────────────────┘
 ```
 
-Il pannello scende dall'icona a fine dettatura: **leggi quello che hai detto**,
-lo correggi a mano se serve, e **Copia** (o Invio) manda negli appunti la versione
-che vedi. Il testo è già negli appunti comunque: il pannello serve a controllarlo
-prima di incollarlo in Warp.
+**Clic sull'icona** = apre il pannello. **Clic destro** = il menu.
+Il tondo rosso e ⌘⇧D fanno la stessa cosa: partire e fermarsi.
 
-Riaprirlo dopo: menu 🎙 → *Rivedi l'ultimo testo*.
+Mentre registri, attorno al bottone si allarga un alone che segue la tua voce —
+serve a vedere a colpo d'occhio che il microfono sta prendendo davvero qualcosa.
+Il pannello resta aperto finché registri, e ti mostra il tempo che scorre.
+
+A fine dettatura il testo compare lì: lo leggi, lo correggi se serve, e **Copia**
+(o Invio) manda negli appunti la versione che vedi. È già negli appunti comunque:
+il pannello serve a controllarlo prima di incollarlo in Warp.
 
 ## Accendere
 
