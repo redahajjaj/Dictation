@@ -118,6 +118,35 @@ SILENZIO = 0.055      # sotto questo livello è silenzio
 PAUSA = 0.45          # tanto silenzio chiude un blocco
 BLOCCO_MIN = 1.3      # meno di così non vale la pena mandarlo
 BLOCCO_MAX = 5.0      # se parli senza respirare, si manda comunque
+VOCE_MINIMA = 0.35    # secondi di parlato sotto i quali un blocco non si manda
+
+# Su audio muto Whisper non risponde "niente": inventa. Sono frasi dei
+# sottotitoli su cui è stato addestrato, e tornano sempre le stesse.
+# Si scartano solo quando sono TUTTO il testo del blocco, mai dentro un discorso.
+ALLUCINAZIONI = {
+    "grazie a tutti", "grazie", "grazie mille", "grazie per la visione",
+    "grazie per aver guardato il video", "grazie per aver guardato",
+    "sottotitoli e revisione a cura di qtss", "sottotitoli a cura di qtss",
+    "sottotitoli creati dalla comunita amara org", "sottotitoli e revisione a cura di",
+    "iscriviti al canale", "ciao a tutti", "ciao", "alla prossima",
+    "buona giornata", "buon proseguimento", "fine", "the end",
+    "thank you", "thanks for watching", "bye", "you",
+}
+
+
+def solo_allucinazione(testo: str) -> bool:
+    ridotto = re.sub(r"[^a-z ]+", " ", testo.lower())
+    ridotto = re.sub(r"\s+", " ", ridotto).strip()
+    return not ridotto or ridotto in ALLUCINAZIONI
+
+
+def durata_voce(pezzi) -> float:
+    """Quanti secondi di parlato vero ci sono in questi pezzi."""
+    frame = 0
+    for p in pezzi:
+        if float(np.sqrt(np.mean(p.astype(np.float32) ** 2))) / 4000.0 > SILENZIO:
+            frame += len(p)
+    return frame / FREQUENZA
 DURATA_MAX = 15 * 60  # taglio di sicurezza se ti dimentichi il microfono aperto
 
 
@@ -576,6 +605,14 @@ class App(rumps.App):
             in_pausa = (time.time() - self._ultimo_suono) > PAUSA
             if not in_pausa and durata < BLOCCO_MAX:
                 continue
+
+            voce = durata_voce(pezzi)
+            if voce < 0.15:
+                indice += len(pezzi)    # muto del tutto: si butta e si va avanti
+                continue
+            if voce < VOCE_MINIMA:
+                continue                # appena un accenno: aspetta il prossimo giro
+
             indice += len(pezzi)
             pezzo = self._trascrivi_blocco(pezzi)
             if pezzo:
@@ -589,8 +626,10 @@ class App(rumps.App):
             # a Whisper si passa la coda di quanto già trascritto: gli fa da
             # contesto e cuce meglio il punto di attacco fra un blocco e l'altro
             contesto = self._anteprima[-260:] if self._anteprima else ", ".join(self.vocabolario[:40])
-            grezzo = self.groq.trascrivi(f, contesto)
-            return applica_correzioni(grezzo.strip(), self.correzioni)
+            grezzo = self.groq.trascrivi(f, contesto).strip()
+            if solo_allucinazione(grezzo):
+                return ""
+            return applica_correzioni(grezzo, self.correzioni)
         except Exception as e:
             print(f"anteprima saltata: {e}", file=sys.stderr)
             return ""
@@ -609,6 +648,9 @@ class App(rumps.App):
         if not pezzi or secondi < 0.6:
             self._stato, self._etichetta = PRONTO, "troppo corto: riprova"
             return
+        if durata_voce(pezzi) < 0.25:
+            self._stato, self._etichetta = PRONTO, "non ho sentito la voce"
+            return
         self._stato, self._etichetta = ELABORA, "trascrivo…"
         precedente = self._testo_fisso
         threading.Thread(
@@ -622,7 +664,7 @@ class App(rumps.App):
 
             suggerimento = "Dettatura in italiano. Termini ricorrenti: " + ", ".join(self.vocabolario[:60])
             grezzo = self.groq.trascrivi(audio, suggerimento)
-            if not grezzo:
+            if not grezzo or solo_allucinazione(grezzo):
                 self._eventi.put((PRONTO, "non ho sentito niente"))
                 return
 

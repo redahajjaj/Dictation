@@ -44,6 +44,19 @@ grigio sparisce e lascia il posto al testo definitivo, che è più preciso perch
 Whisper ha visto tutta la frase invece che un pezzo per volta. In una prova su
 16 secondi di parlato: anteprima 4 nomi giusti su 6, definitivo 6 su 6.
 
+### «Grazie a tutti» e altre frasi mai dette
+
+Su audio muto Whisper non risponde «niente»: **inventa**. Restituisce frasi dei
+sottotitoli su cui è stato addestrato — *Grazie a tutti*, *Sottotitoli a cura di
+QTSS*, *Thank you*. Tre guardie lo impediscono:
+
+1. un blocco si manda solo se contiene almeno **0,35 secondi di parlato vero**;
+2. se la trascrizione è **soltanto** una di quelle frasi, si butta;
+3. se in tutta la registrazione non c'è voce, l'app lo dice invece di trascrivere.
+
+Il filtro guarda il testo intero: «Grazie a tutti» da solo viene scartato,
+«Grazie a tutti per il lavoro su Acmelux» resta.
+
 L'anteprima si spegne dal menu (*Anteprima mentre parli*) se preferisci
 risparmiare chiamate.
 
