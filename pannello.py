@@ -232,6 +232,11 @@ class Pannello(NSObject):
     @objc.python_method
     def inizializza(self, app):
         self.app = app
+        # La scorciatoia vera, per i tooltip. La decide il .env (DETTATURA_HOTKEY)
+        # e l'app la traduce in simboli: scriverla qui a mano vorrebbe dire che al
+        # primo cambio la barra mente. Il getattr serve alle prove, che passano
+        # un'app finta.
+        self.tasti = getattr(app, "tasti", "⌘S")
         self.finestra = None
         self.menu_btn = None            # ci si aggancia il menu di rumps
         self._testo = ""
@@ -296,7 +301,7 @@ class Pannello(NSObject):
 
         # sinistra: mic quando puoi parlare, stop mentre registri, il segnale
         # quando qualcosa non va. È sempre la stessa casella: cambia solo cosa c'è dentro
-        self.b_azione = self._icona("mic", 15, "premi:", "Detta (⌘⇧D)")
+        self.b_azione = self._icona("mic", 15, "premi:", f"Detta ({self.tasti})")
         self.contenuto.addSubview_(self.b_azione)
 
         self.onda = Onda.alloc().initWithFrame_(
@@ -508,15 +513,16 @@ class Pannello(NSObject):
             v.setHidden_(not visibile)
 
         icona, punti, tinta, attiva, aiuto = {
-            RIPOSO: ("mic", 15, None, True, "Detta (⌘⇧D)"),
-            REGISTRA: ("stop.fill", 13, NSColor.systemRedColor(), True, "Ferma (⌘⇧D)"),
+            RIPOSO: ("mic", 15, None, True, f"Detta ({self.tasti})"),
+            REGISTRA: ("stop.fill", 13, NSColor.systemRedColor(), True,
+                       f"Ferma ({self.tasti})"),
             ELABORA: ("circle.dotted", 15, None, False, None),
             OCCUPATO: ("circle.dotted", 15, None, False, None),
             # arancione e non rosso: il rosso è già il REC, e se lo fosse anche
             # l'errore smetterebbe di voler dire «sto registrando»
             ERRORE: ("exclamationmark.triangle.fill", 14,
                      NSColor.systemOrangeColor(), False, None),
-            DISTESA: ("mic", 15, None, True, "Detta (⌘⇧D)"),
+            DISTESA: ("mic", 15, None, True, f"Detta ({self.tasti})"),
         }[forma]
         self.b_azione.setImage_(_simbolo(icona, punti))
         self.b_azione.setContentTintColor_(tinta)

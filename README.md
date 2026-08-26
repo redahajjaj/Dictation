@@ -1,6 +1,6 @@
 # Dettatura
 
-Icona nella barra dei menu. **⌘⇧D** per iniziare, **⌘⇧D** per finire: il testo ripulito
+Icona nella barra dei menu. **⌘S** per iniziare, **⌘S** per finire: il testo ripulito
 è già negli appunti, pronto per ⌘V in Warp.
 
 ```
@@ -28,7 +28,7 @@ alla frase, l'altezza alle dettature che si accodano.
 La barra **resta dove la metti**: si trascina da qualsiasi punto, sta sopra le
 altre e non sparisce quando passi a Warp. Tienila di fianco al terminale. Per
 rimandarla sotto l'icona basta chiudere e riaprire l'app.
-Il microfono a sinistra e ⌘⇧D fanno la stessa cosa: partire e fermarsi.
+Il microfono a sinistra e ⌘S fanno la stessa cosa: partire e fermarsi.
 
 ## Mentre parli si vede l'onda, non le parole
 
@@ -80,7 +80,7 @@ Alla prima dettatura macOS chiede due permessi — Impostazioni di Sistema → P
 | Permesso | Serve a | Se lo neghi |
 |---|---|---|
 | **Microfono** | registrare | non funziona niente |
-| **Monitoraggio input** | la scorciatoia ⌘⇧D | apri la barra dal 🎙 e premi il microfono |
+| **Monitoraggio input** | la scorciatoia ⌘S | apri la barra dal 🎙 e premi il microfono |
 
 Per averla sempre pronta: Impostazioni → Generali → Elementi login → **+** → Dettatura.
 
@@ -138,7 +138,7 @@ e quanti nomi ha azzeccato. Utile dopo aver toccato il vocabolario o le istruzio
 
 In `.env`, sintassi pynput:
 ```
-DETTATURA_HOTKEY=<ctrl>+<alt>+d
+DETTATURA_HOTKEY=<cmd>+s
 ```
 
 ## Se si blocca

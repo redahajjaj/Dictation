@@ -141,7 +141,7 @@ def main():
 
     # 01 riposo
     p.imposta_testo("")
-    p.aggiorna(P.PRONTO, "premi ⌘⇧D per dettare")
+    p.aggiorna(P.PRONTO, "premi ⌘S per dettare")
     L, A = misure()
     controlla("01 riposo: nocciola", A == P.NOCC_A and L >= P.NOCC_MIN, f"{L}x{A}")
     controlla("01 riposo: mic attivo", p._azione_attiva)

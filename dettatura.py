@@ -3,7 +3,9 @@
 Dettatura — barra dei menu del Mac: premi la scorciatoia, parli, il testo ripulito
 è già negli appunti, pronto da incollare in Warp.
 
-Flusso:  ⌘⇧D → registra → Groq Whisper → un LLM ripulisce → 📋 appunti
+Flusso:  la scorciatoia → registra → Groq Whisper → un LLM ripulisce → 📋 appunti
+(quale scorciatoia lo decide DETTATURA_HOTKEY nel .env; l'app la scrive da sé
+ovunque serva — invito, tooltip, menu — invece di tenerla scritta a mano)
 
 Non usa il microfono se non mentre registri, e non manda niente a nessuno
 tranne l'audio a Groq per la trascrizione.
@@ -104,7 +106,10 @@ def _primo_avvio() -> None:
         if origine.exists() and not destinazione.exists():
             destinazione.write_text(origine.read_text(encoding="utf-8"), encoding="utf-8")
     if not ENV.exists():
-        ENV.write_text("GROQ_API_KEY=\nDETTATURA_HOTKEY=<cmd>+<shift>+d\nDETTATURA_LLM=\n", encoding="utf-8")
+        ENV.write_text(
+            f"GROQ_API_KEY=\nDETTATURA_HOTKEY={HOTKEY_DEFAULT}\nDETTATURA_LLM=\n",
+            encoding="utf-8",
+        )
         ENV.chmod(0o600)
 
 API = "https://api.groq.com/openai/v1"
@@ -341,13 +346,39 @@ def scrivi_storico(grezzo: str, pulito: str, modo: str, secondi: float) -> None:
 
 ICONE = {PRONTO: "🎙", ELABORA: "⏳"}
 NOMI_MODO = {"pulito": "testo pulito", "prompt": "istruzione", "grezzo": "grezzo"}
-INVITO = "premi ⌘⇧D per dettare"
+
+# La scorciatoia si cambia dal .env, e l'app deve dire quella VERA: scriverla a
+# mano nell'invito e nei tooltip significa che al primo cambio l'app mente in
+# cinque punti diversi (ed è già successo: il README diceva ⌘⇧D ovunque).
+HOTKEY_DEFAULT = "<cmd>+s"
+_SIMBOLI_TASTI = {
+    "<ctrl>": "⌃", "<alt>": "⌥", "<shift>": "⇧", "<cmd>": "⌘", "<cmd_l>": "⌘",
+    "<space>": "Spazio", "<enter>": "⏎", "<esc>": "⎋", "<tab>": "⇥",
+}
+# l'ordine con cui Apple scrive i modificatori: ⌃⌥⇧⌘ + tasto, sempre
+_ORDINE_MOD = ("<ctrl>", "<alt>", "<shift>", "<cmd>", "<cmd_l>")
+
+
+def etichetta_tasti(spec: str) -> str:
+    """Da «<cmd>+<shift>+d» a «⌘⇧D»."""
+    pezzi = [p.strip().lower() for p in spec.split("+") if p.strip()]
+    mod = [p for p in _ORDINE_MOD if p in pezzi]
+    resto = [p for p in pezzi if p not in _ORDINE_MOD]
+    return "".join(
+        _SIMBOLI_TASTI.get(p, p.upper() if len(p) == 1 else p.strip("<>").upper())
+        for p in mod + resto
+    )
 
 
 class App(rumps.App):
     def __init__(self):
         super().__init__("🎙", quit_button=None)
         self.cfg = carica_env()
+        # una sola fonte per la scorciatoia: da qui discendono l'invito, i
+        # tooltip della barra e l'ascolto vero dei tasti (più in basso)
+        self.scorciatoia = self.cfg.get("DETTATURA_HOTKEY", HOTKEY_DEFAULT)
+        self.tasti = etichetta_tasti(self.scorciatoia)
+        self.invito = f"premi {self.tasti} per dettare"
         self.vocabolario = carica_vocabolario()
         self.correzioni = carica_correzioni()
         self.groq = Groq(self.cfg.get("GROQ_API_KEY", ""), self.cfg.get("DETTATURA_LLM", ""))
@@ -360,11 +391,11 @@ class App(rumps.App):
         self._ultimo = ""
         self._eventi: queue.Queue = queue.Queue()
         self._stato = PRONTO
-        self._etichetta = INVITO
+        self._etichetta = self.invito
         self._livello = 0.0
         self._pannello: Pannello | None = None
         self._fine_attesa = 0.0
-        self._etichetta_prima = INVITO
+        self._etichetta_prima = self.invito
         self._clic = None
         self._icona_agganciata = False
 
@@ -386,7 +417,7 @@ class App(rumps.App):
             rumps.MenuItem("Esci", callback=rumps.quit_application),
         ]
 
-        scorciatoia = self.cfg.get("DETTATURA_HOTKEY", "<cmd>+<shift>+d")
+        scorciatoia = self.scorciatoia
         uscita = self.cfg.get("DETTATURA_USCITA", "<cmd>+<shift>+<alt>+q")
         try:
             # l'ascolto dei tasti gira su un thread suo: la scorciatoia di
@@ -496,7 +527,7 @@ class App(rumps.App):
     def svuota_pannello(self):
         self._ultimo = ""
         self._pannello.imposta_testo("")
-        self._stato, self._etichetta = PRONTO, INVITO
+        self._stato, self._etichetta = PRONTO, self.invito
         self._pannello.aggiorna(self._stato, self._etichetta)
 
     # -- il battito: unico posto che tocca la grafica -------------------------
