@@ -1,7 +1,12 @@
 """
 La finestra della dettatura: bottone di registrazione al centro, il testo sotto.
-Si apre con un clic sull'icona e resta dove la metti — si trascina da qualsiasi
-punto e non sparisce quando lavori altrove, così puoi tenerla di fianco a Warp.
+
+**Dove compare.** Esce da sotto l'icona del microfono, come una finestrella che
+scende. Se la trascini di fianco a Warp, quello diventa il suo posto: da lì non
+la sposta più nessuno, nemmeno quando la chiudi e la riapri. Per rimandarla a
+casa si chiude e si riapre l'app — niente viene scritto su disco.
+
+Si trascina da qualsiasi punto e non sparisce quando lavori altrove.
 
 Tutti i colori vengono dal sistema (labelColor, systemRed…), così il pannello
 segue da solo il tema chiaro e scuro senza che qui ci sia una sola tinta fissa.
@@ -36,6 +41,7 @@ from AppKit import (
     NSMakeRect,
     NSMakeSize,
     NSNoBorder,
+    NSScreen,
     NSScrollView,
     NSTextField,
     NSTextView,
@@ -45,8 +51,12 @@ from AppKit import (
     NSView,
     NSViewController,
     NSViewWidthSizable,
+    NSWindow,
+    NSWindowCollectionBehaviorCanJoinAllSpaces,
+    NSWindowCollectionBehaviorFullScreenAuxiliary,
+    NSWindowDidMoveNotification,
 )
-from Foundation import NSObject
+from Foundation import NSNotificationCenter, NSObject, NSPointInRect
 
 # --- misure: tutto il layout discende da queste -----------------------------
 LARGO = 320
@@ -58,6 +68,14 @@ H_STATO = 18
 H_AZIONI = 30
 TESTO_MIN = 96
 TESTO_MAX = 250
+
+STACCO_ICONA = 6      # quanto la finestra sta sotto l'icona del microfono
+MARGINE_SCHERMO = 8   # quanto respiro lasciarle dai bordi dello schermo
+
+# La posizione non si salva più su disco: la finestra esce da sotto l'icona a
+# ogni comparsa, finché non la trascini tu. Questo nome resta solo per cancellare
+# ciò che le versioni vecchie avevano già scritto nel plist (vedi _costruisci).
+NOME_SALVATAGGIO_VECCHIO = "finestra-dettatura"
 
 PRONTO, REGISTRA, ELABORA = "pronto", "registra", "elabora"
 
@@ -234,6 +252,18 @@ class Pannello(NSObject):
         self.titolo = None
         self.menu_btn = None
         self.testo_mostrato = ""
+        # Chi comanda la posizione: finché è False la finestra torna sotto
+        # l'icona a ogni comparsa; al primo trascinamento passa a True e da lì
+        # in poi decide Reda. Vive in RAM: riavviare l'app la rimanda a casa.
+        self._spostata = False
+        # L'ultima origine che abbiamo chiesto noi. Serve a non scambiare i
+        # nostri spostamenti per un trascinamento (vedi finestraMossa_).
+        self._atteso = None
+        # Se la barra è già riuscita a mettersi sotto l'icona almeno una volta.
+        # Nel primo secondo dopo l'avvio macOS non ha ancora piazzato l'icona
+        # (misurato: risponde 0,0 fino a ~1,5 s), e senza questo la finestra
+        # resterebbe al ripiego per tutta la giornata: le comparse sono ~1 al dì.
+        self._a_casa = False
         return self
 
     # -- misure --------------------------------------------------------------
@@ -316,10 +346,30 @@ class Pannello(NSObject):
         self.finestra.setTitlebarAppearsTransparent_(True)
         self.finestra.setMovableByWindowBackground_(True)   # si trascina da ovunque
         self.finestra.setLevel_(NSFloatingWindowLevel)      # resta sopra le altre
+        # senza questo la finestra sparisce ogni volta che clicchi su Warp:
+        # è l'auto-chiusura più frequente possibile. NON TOGLIERE.
         self.finestra.setHidesOnDeactivate_(False)
+        # e senza questo non si vede affatto quando Warp è a schermo intero:
+        # una finestra flottante non entra da sola nello Space di un'app fullscreen
+        self.finestra.setCollectionBehavior_(
+            NSWindowCollectionBehaviorCanJoinAllSpaces
+            | NSWindowCollectionBehaviorFullScreenAuxiliary
+        )
         # senza questo, chiuderla la distrugge e riaprirla fa crashare l'app
         self.finestra.setReleasedWhenClosed_(False)
         self.finestra.setContentView_(vista)
+
+        # Quando la trascini, macOS ce lo dice: da quel momento il posto lo
+        # scegli tu e la finestra smette di tornare sotto l'icona.
+        NSNotificationCenter.defaultCenter().addObserver_selector_name_object_(
+            self, "finestraMossa:", NSWindowDidMoveNotification, self.finestra
+        )
+
+        # Igiene: le versioni vecchie salvavano la posizione per sempre nel plist.
+        # Quel valore è ancora lì e punta a un monitor che potresti non avere più
+        # (nel plist di Reda c'è x=2764, un secondo schermo scollegato). Nessuno
+        # lo rilegge — l'autosave non si aggancia più — ma tenerlo è sporcizia.
+        NSWindow.removeFrameUsingName_(NOME_SALVATAGGIO_VECCHIO)
 
     @objc.python_method
     def _disponi(self, testo: str):
@@ -361,11 +411,12 @@ class Pannello(NSObject):
         cornice = self.finestra.frameRectForContentRect_(NSMakeRect(0, 0, LARGO, H))
         ora = self.finestra.frame()
         alto = ora.origin.y + ora.size.height          # il bordo superiore non si muove:
-        self.finestra.setFrame_display_(                # la finestra cresce verso il basso
-            NSMakeRect(ora.origin.x, alto - cornice.size.height,
-                       cornice.size.width, cornice.size.height),
-            True,
-        )
+        nuovo = NSMakeRect(ora.origin.x, alto - cornice.size.height,
+                           cornice.size.width, cornice.size.height)
+        # niente clamp qui: la finestra cresce verso il basso e deve poterlo fare
+        # anche se sfora, o parcheggiata in basso si alzerebbe da sola mentre parli
+        self._atteso = (round(nuovo.origin.x), round(nuovo.origin.y))
+        self.finestra.setFrame_display_(nuovo, True)
 
     # -- aggiornamenti dallo stato dell'app -----------------------------------
     @objc.python_method
@@ -431,30 +482,140 @@ class Pannello(NSObject):
         return self.finestra is not None and self.finestra.isVisible()
 
     @objc.python_method
-    def _sotto_icona(self):
-        """Solo la prima volta: dopo, la finestra resta dove l'hai lasciata."""
-        bottone_barra = self.app._nsapp.nsstatusitem.button()
-        if bottone_barra is None or bottone_barra.window() is None:
-            return
-        r = bottone_barra.window().convertRectToScreen_(bottone_barra.frame())
+    def _ancora_icona(self):
+        """Dove sta l'icona del microfono, in coordinate schermo. None se non c'è.
+
+        Può mancare davvero: barra dei menu piena (il notch ne mangia parecchia),
+        Bartender o Ice che nascondono le icone, o l'app non ancora avviata del
+        tutto — rumps aggancia nsstatusitem solo dentro run().
+        """
+        nsapp = getattr(self.app, "_nsapp", None)
+        statusitem = getattr(nsapp, "nsstatusitem", None)
+        bottone = statusitem.button() if statusitem is not None else None
+        if bottone is None or bottone.window() is None:
+            return None
+        r = bottone.window().convertRectToScreen_(bottone.frame())
+        # Un'icona della barra dei menu sta in cima allo schermo, sempre. Se le
+        # coordinate dicono altro, il sistema non l'ha ancora piazzata (succede
+        # prima che rumps abbia finito di avviarsi) e risponde (0,0): fidarsene
+        # manderebbe la finestra sotto il bordo inferiore, e il clamp la
+        # incollerebbe in basso a sinistra. Meglio dire che l'icona non c'è.
+        cima = max(s.frame().origin.y + s.frame().size.height
+                   for s in NSScreen.screens())
+        if r.origin.y + r.size.height < cima - 50:
+            return None
+        return r
+
+    @objc.python_method
+    def _schermo_di(self, r):
+        """Lo schermo che contiene il centro di r — Reda ne ha due."""
+        centro = NSMakePoint(r.origin.x + r.size.width / 2,
+                             r.origin.y + r.size.height / 2)
+        for s in NSScreen.screens():
+            if NSPointInRect(centro, s.frame()):
+                return s
+        return NSScreen.mainScreen()
+
+    @objc.python_method
+    def _dentro(self, r):
+        """Rientra r nello schermo. Serve sul serio, non è una cintura di sicurezza:
+        con l'icona vicino al bordo destro, una finestra centrata sotto di lei
+        uscirebbe fuori di centinaia di punti."""
+        v = self._schermo_di(r).visibleFrame()
+        x, y = r.origin.x, r.origin.y
+        # se la finestra è più larga (o più alta) dello schermo il clamp non ha
+        # una soluzione: si appoggia all'angolo e tanto basta
+        if r.size.width >= v.size.width:
+            x = v.origin.x
+        else:
+            x = max(v.origin.x + MARGINE_SCHERMO, x)
+            x = min(v.origin.x + v.size.width - r.size.width - MARGINE_SCHERMO, x)
+        if r.size.height >= v.size.height:
+            y = v.origin.y
+        else:
+            y = max(v.origin.y + MARGINE_SCHERMO, y)
+            # in alto niente margine: visibleFrame finisce già sotto la barra dei
+            # menu, e sommarcene un altro sfaserebbe la finestra rispetto
+            # all'icona da cui deve scendere (misurato: 9 punti invece di 6)
+            y = min(v.origin.y + v.size.height - r.size.height, y)
+        return NSMakeRect(x, y, r.size.width, r.size.height)
+
+    @objc.python_method
+    def _muovi(self, r):
+        """Sposta la finestra ricordandosi dove l'ha chiesta: così l'avviso di
+        spostamento che macOS rimanda indietro non viene scambiato per una
+        trascinata di Reda."""
+        self._atteso = (round(r.origin.x), round(r.origin.y))
+        self.finestra.setFrameOrigin_(r.origin)
+
+    @objc.python_method
+    def _casa(self):
+        """Sotto l'icona del microfono, centrata. È il posto di casa della finestra.
+
+        Torna True se l'icona c'era davvero: se no si è ripiegato altrove e vale
+        la pena riprovare più tardi.
+        """
         f = self.finestra.frame()
-        self.finestra.setFrameOrigin_(
-            NSMakePoint(r.origin.x + r.size.width / 2 - f.size.width / 2,
-                        r.origin.y - f.size.height - 6)
-        )
+        icona = self._ancora_icona()
+        if icona is None:
+            # senza icona non c'è un "sotto": in alto al centro è il ripiego
+            # meno sbagliato — nascere a 0,0 la metterebbe in basso a sinistra
+            v = NSScreen.mainScreen().visibleFrame()
+            x = v.origin.x + (v.size.width - f.size.width) / 2
+            y = v.origin.y + v.size.height - f.size.height - STACCO_ICONA
+        else:
+            x = icona.origin.x + icona.size.width / 2 - f.size.width / 2
+            y = icona.origin.y - f.size.height - STACCO_ICONA
+        self._muovi(self._dentro(NSMakeRect(x, y, f.size.width, f.size.height)))
+        return icona is not None
+
+    @objc.python_method
+    def _posa(self, comparsa: bool):
+        """Decide se rimettere la finestra a casa. Chi l'ha trascinata comanda.
+
+        Fuori da una comparsa non si tocca niente — se no la barra salterebbe
+        sotto l'icona a ogni frase dettata. L'unica eccezione è la finestra che
+        non è mai riuscita ad arrivare a casa: quella riprova, e appena ci
+        riesce smette (il ripiego è sempre lo stesso punto, quindi finché
+        l'icona manca la barra resta ferma lo stesso).
+        """
+        if self._spostata:
+            return
+        if comparsa or not self._a_casa:
+            self._a_casa = self._casa()
+
+    def finestraMossa_(self, _notifica):
+        """L'hai trascinata: da adesso il posto lo scegli tu.
+
+        Filtra i nostri spostamenti confrontando con l'origine che abbiamo
+        chiesto, non con un contatore: un contatore si azzererebbe troppo presto
+        quando il ridimensionamento diventerà animato (il frame continua a
+        cambiare per 0,3 s dopo la chiamata), e ogni fotogramma passerebbe per
+        una trascinata.
+        """
+        o = self.finestra.frame().origin
+        if (self._atteso is not None
+                and abs(o.x - self._atteso[0]) <= 1
+                and abs(o.y - self._atteso[1]) <= 1):
+            return
+        self._spostata = True
 
     @objc.python_method
     def apri(self, testo: str | None = None):
-        prima_volta = self.finestra is None
-        if prima_volta:
+        # "Comparsa" è il passaggio da nascosta a visibile, e non coincide con
+        # questa chiamata: a fine dettatura apri() viene invocata anche su una
+        # finestra già aperta (dettatura.py:523, senza guardia). Riposizionare lì
+        # farebbe saltare la barra sotto l'icona a ogni frase dettata.
+        comparsa = not self.e_aperto()
+        if self.finestra is None:
             self._costruisci()
-            self._disponi(testo or "")
+            # con "" e non con testo: _disponi ricorda ciò che ha disposto, e
+            # imposta_testo salta il lavoro se crede che il testo sia già a video
+            self._disponi("")
         if testo is not None:
             self.imposta_testo(testo)
-        if prima_volta and not self.finestra.setFrameUsingName_("finestra-dettatura"):
-            self._sotto_icona()
+        self._posa(comparsa)
         self.finestra.makeKeyAndOrderFront_(None)
-        self.finestra.setFrameAutosaveName_("finestra-dettatura")
         NSApp.activateIgnoringOtherApps_(True)
 
     @objc.python_method
