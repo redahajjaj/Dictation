@@ -38,7 +38,17 @@ from Foundation import NSObject
 import objc
 from pynput import keyboard
 
-from pannello import ELABORA, PRONTO, REGISTRA, Pannello
+from pannello import (
+    ATTESA,
+    ELABORA,
+    ERR_CORTO,
+    ERR_GENERICO,
+    ERR_NIENTE,
+    ERR_VOCE,
+    PRONTO,
+    REGISTRA,
+    Pannello,
+)
 
 
 class ClicIcona(NSObject):
@@ -331,7 +341,7 @@ def scrivi_storico(grezzo: str, pulito: str, modo: str, secondi: float) -> None:
 
 ICONE = {PRONTO: "🎙", ELABORA: "⏳"}
 NOMI_MODO = {"pulito": "testo pulito", "prompt": "istruzione", "grezzo": "grezzo"}
-INVITO = "premi il tondo, o ⌘⇧D"
+INVITO = "premi ⌘⇧D per dettare"
 
 
 class App(rumps.App):
@@ -353,6 +363,8 @@ class App(rumps.App):
         self._etichetta = INVITO
         self._livello = 0.0
         self._pannello: Pannello | None = None
+        self._fine_attesa = 0.0
+        self._etichetta_prima = INVITO
         self._clic = None
         self._icona_agganciata = False
 
@@ -456,7 +468,10 @@ class App(rumps.App):
         try:
             nsmenu = self.menu._menu
             ancora = self._pannello.menu_btn if self._pannello is not None else None
-            if ancora is not None and self._pannello.e_aperto():
+            # il ••• esiste solo nella barra distesa: a nocciola è nascosto, e
+            # agganciarci il menu lo farebbe uscire in un punto a caso
+            if (ancora is not None and self._pannello.e_aperto()
+                    and not ancora.isHidden()):
                 nsmenu.popUpMenuPositioningItem_atLocation_inView_(
                     None, NSMakePoint(0, 0), ancora
                 )
@@ -512,6 +527,9 @@ class App(rumps.App):
         else:
             self.title = ICONE.get(self._stato, "🎙")
 
+        if self._etichetta == ATTESA and time.time() >= self._fine_attesa:
+            self._etichetta = self._etichetta_prima
+
         if anteprima_nuova is not None:
             p = self._crea_pannello()
             if not p.e_aperto():
@@ -529,6 +547,14 @@ class App(rumps.App):
     def _alterna(self):
         if self.registrando:
             self._ferma()
+        elif self._stato == ELABORA:
+            # Premuto mentre trascrive: senza guardia partiva una SECONDA
+            # registrazione sopra la prima. Bloccare in silenzio sembrerebbe un
+            # tasto rotto, quindi la barra lo dice per un secondo e mezzo e poi
+            # torna a «trascrivo…» (ticket 08, stato 10).
+            self._etichetta_prima = self._etichetta
+            self._etichetta = ATTESA
+            self._fine_attesa = time.time() + 1.5
         else:
             self._parti()
 
@@ -646,10 +672,10 @@ class App(rumps.App):
         secondi = time.time() - self._inizio
         pezzi, self._pezzi = self._pezzi, []
         if not pezzi or secondi < 0.6:
-            self._stato, self._etichetta = PRONTO, "troppo corto: riprova"
+            self._stato, self._etichetta = PRONTO, ERR_CORTO
             return
         if durata_voce(pezzi) < 0.25:
-            self._stato, self._etichetta = PRONTO, "non ho sentito la voce"
+            self._stato, self._etichetta = PRONTO, ERR_VOCE
             return
         self._stato, self._etichetta = ELABORA, "trascrivo…"
         precedente = self._testo_fisso
@@ -665,7 +691,7 @@ class App(rumps.App):
             suggerimento = "Dettatura in italiano. Termini ricorrenti: " + ", ".join(self.vocabolario[:60])
             grezzo = self.groq.trascrivi(audio, suggerimento)
             if not grezzo or solo_allucinazione(grezzo):
-                self._eventi.put((PRONTO, "non ho sentito niente"))
+                self._eventi.put((PRONTO, ERR_NIENTE))
                 return
 
             # prima le sostituzioni sicure, così l'LLM legge già i nomi giusti;
@@ -694,7 +720,7 @@ class App(rumps.App):
             ))
         except Exception as e:
             print(f"errore: {e}", file=sys.stderr)
-            self._eventi.put((PRONTO, "errore: guarda il Terminale"))
+            self._eventi.put((PRONTO, ERR_GENERICO))
         finally:
             audio.unlink(missing_ok=True)
 

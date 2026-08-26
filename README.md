@@ -5,44 +5,42 @@ Icona nella barra dei menu. **⌘⇧D** per iniziare, **⌘⇧D** per finire: il
 
 ```
         🎙  ← un clic sull'icona
-   ┌────────────────────────────────┐
-   │ Dettatura                  ••• │
-   │                                │
-   │             ╭───╮              │
-   │            ( ● )               │  ← il tondo rosso: premi e parla
-   │             ╰───╯              │     (diventa ■ mentre registra)
-   │       premi il tondo, o ⌘⇧D    │
-   │                                │
-   │ ┌────────────────────────────┐ │
-   │ │ Per Acmelux dobbiamo      │ │  ← il testo, correggibile
-   │ │ chiudere i sei bloccanti…  │ │
-   │ └────────────────────────────┘ │
-   │ [Svuota]              [Copia]  │
-   └────────────────────────────────┘
+        │
+   ╭──────────────────────╮
+   │ ■  ▂▅█▂▇▃▅  0:14     │   ← mentre parli: onda e cronometro, niente altro
+   ╰──────────────────────╯
+
+        🎙
+        │
+   ╭──────────────────────────────────────────────────────────╮
+   │ 🎙  Per Acmelux dobbiamo ancora decidere il corriere     │
+   │                            7 parole      ⌫    ⧉    •••   │
+   ╰──────────────────────────────────────────────────────────╯
+        ↑ quando c'è testo, la barra si distende
 ```
 
-**Clic sull'icona** = apre la finestra. **Clic destro** = il menu.
+Una capsula di vetro che **esce da sotto l'icona**. Ha due taglie: piccola
+mentre parli, lunga quando c'è qualcosa da leggere — e la larghezza si adatta
+alla frase, l'altezza alle dettature che si accodano.
 
-La finestra **resta dove la metti**: si trascina da qualsiasi punto, sta sopra le
-altre e non sparisce quando passi a Warp. Tienila di fianco al terminale.
-Il tondo rosso e ⌘⇧D fanno la stessa cosa: partire e fermarsi.
+**Clic sull'icona** = apre la barra. **Clic destro** = il menu.
 
-Mentre registri, attorno al bottone si allarga un alone che segue la tua voce —
-serve a vedere a colpo d'occhio che il microfono sta prendendo davvero qualcosa.
+La barra **resta dove la metti**: si trascina da qualsiasi punto, sta sopra le
+altre e non sparisce quando passi a Warp. Tienila di fianco al terminale. Per
+rimandarla sotto l'icona basta chiudere e riaprire l'app.
+Il microfono a sinistra e ⌘⇧D fanno la stessa cosa: partire e fermarsi.
 
-## Il testo si forma mentre parli
+## Mentre parli si vede l'onda, non le parole
 
-**In grigio** compare quello che stai dicendo, aggiornato ogni pochi secondi.
-**In nero** resta quello che è già definitivo.
+L'onda segue la tua voce — serve a vedere a colpo d'occhio che il microfono sta
+prendendo davvero qualcosa. Se smetti di parlare **si appiattisce in una riga**.
+Il testo arriva tutto insieme alla fine, quando la barra si distende: leggere
+parole che si riscrivono da sole mentre parli fa solo muovere la barra.
 
-Groq non trascrive in streaming, quindi l'anteprima manda a Whisper i pezzi già
-pronunciati, tagliati **dove fai una pausa** — così un taglio non spezza mai una
-parola a metà. Se parli di fila senza respirare, taglia comunque ogni 5 secondi.
-
-Quando fermi la registrazione l'audio viene ritrascritto **per intero**: il
-grigio sparisce e lascia il posto al testo definitivo, che è più preciso perché
-Whisper ha visto tutta la frase invece che un pezzo per volta. In una prova su
-16 secondi di parlato: anteprima 4 nomi giusti su 6, definitivo 6 su 6.
+Groq non trascrive in streaming: quando fermi la registrazione l'audio viene
+mandato a Whisper **per intero**, ed è più preciso di quanto sarebbe pezzo per
+pezzo. In una prova su 16 secondi di parlato: a blocchi 4 nomi giusti su 6,
+tutto insieme 6 su 6.
 
 ### «Grazie a tutti» e altre frasi mai dette
 
@@ -57,14 +55,16 @@ QTSS*, *Thank you*. Tre guardie lo impediscono:
 Il filtro guarda il testo intero: «Grazie a tutti» da solo viene scartato,
 «Grazie a tutti per il lavoro su Acmelux» resta.
 
-L'anteprima si spegne dal menu (*Anteprima mentre parli*) se preferisci
-risparmiare chiamate.
+⚠️ Il menu ha ancora *Anteprima mentre parli*, acceso: manda a Whisper i pezzi già
+pronunciati ogni 1-5 secondi. Da quando il testo non si legge più mentre parli
+**non si vede da nessuna parte** — sono solo chiamate. Spegnilo dal menu.
 
-A fine dettatura il testo compare lì: lo leggi, lo correggi se serve, e **Copia**
-(o Invio) manda negli appunti la versione che vedi. È già negli appunti comunque.
+A fine dettatura il testo compare nella barra: lo leggi, lo correggi se serve, e
+**Copia** (o Invio) manda negli appunti la versione che vedi. È già negli appunti
+comunque.
 
-Il tasto **Copia** lampeggia di blu e la finestra **resta aperta**: puoi copiare,
-incollare, e continuare a dettare senza riaprire niente.
+L'icona **Copia** diventa una spunta verde per un secondo e la barra **resta
+aperta**: puoi copiare, incollare, e continuare a dettare senza riaprire niente.
 
 **Le dettature si accumulano**: la seconda va in coda alla prima, separata da una
 riga vuota — puoi dettare un pensiero, fermarti, pensare, e riprendere. Negli
@@ -80,7 +80,7 @@ Alla prima dettatura macOS chiede due permessi — Impostazioni di Sistema → P
 | Permesso | Serve a | Se lo neghi |
 |---|---|---|
 | **Microfono** | registrare | non funziona niente |
-| **Monitoraggio input** | la scorciatoia ⌘⇧D | usi il menu 🎙 → *Inizia a dettare* |
+| **Monitoraggio input** | la scorciatoia ⌘⇧D | apri la barra dal 🎙 e premi il microfono |
 
 Per averla sempre pronta: Impostazioni → Generali → Elementi login → **+** → Dettatura.
 
@@ -130,7 +130,7 @@ e quanti nomi ha azzeccato. Utile dopo aver toccato il vocabolario o le istruzio
 
 - **Appunti** — il testo pulito
 - **`storico.md`** — ogni dettatura con data, versione pulita e grezza in un `<details>`.
-  Se sovrascrivi gli appunti per sbaglio, il testo è lì (o menu → *Ricopia l'ultimo*)
+  Se sovrascrivi gli appunti per sbaglio, il testo è lì (menu → *Apri lo storico*)
 - L'audio è un file temporaneo, **cancellato subito dopo la trascrizione**
 - Fuori dal Mac va solo l'audio a Groq (trascrizione) e il testo grezzo (pulitura)
 
@@ -155,7 +155,7 @@ Da terminale: `~/Progetti/dettatura/ferma.sh`
 |---|---|
 | ⚠️ nella barra | lancia `--check` (sopra): quasi sempre è la chiave Groq scaduta |
 | Non vedo l'icona 🎙 | la barra è piena e macOS la nasconde: togli qualche icona, o su Mac col notch riduci gli elementi. `pgrep -f Dettatura` dice se sta girando |
-| La scorciatoia non fa niente | manca *Monitoraggio input*. Intanto usa il menu → *Inizia a dettare* |
+| La scorciatoia non fa niente | manca *Monitoraggio input*. Intanto apri la barra dal 🎙 e premi il microfono |
 | «Microfono non disponibile» | manca il permesso Microfono, o un'altra app lo tiene occupato |
 | Trascrive in inglese | il dettato era troppo corto: Whisper indovina la lingua sui primi secondi |
 | Si blocca fermando la registrazione | non dovrebbe più: lo stream audio si chiude fuori dal thread principale. Se succede, ⌘⇧⌥Q e scrivimi cosa stavi facendo |
