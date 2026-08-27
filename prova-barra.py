@@ -261,6 +261,21 @@ def main():
 
     print("\n— quello che non si vede negli scatti —")
 
+    # Il colore non deve cambiare quando clicchi sulla barra. La tinta di
+    # NSGlassEffectView macOS la butta via quando la finestra non è key: con
+    # setTintColor_ la capsula saltava di 74 livelli di grigio al primo clic
+    # (misurato a pixel), e il contrasto del testo scendeva sotto il minimo.
+    # Se qualcuno rimette quella riga, questi tre controlli lo dicono subito.
+    if P.NSGlassEffectView is not None:
+        controlla("il colore non lo decide macOS", p.vetro.tintColor() is None,
+                  "niente setTintColor_")
+    controlla("la tinta la dipinge il contenuto",
+              isinstance(p.contenuto, P.VistaVetro))
+    controlla("il filo non si mangia i clic",
+              p.contenuto.subviews()[-1] is p.filo
+              and p.filo.hitTest_(P.NSMakePoint(10, 10)) is None,
+              "ultimo subview, hitTest → None")
+
     # il cursore di scorrimento non deve rubare larghezza al testo: se lo fa, la
     # frase va a capo, e andando a capo il cursore serve davvero — per sempre
     p.imposta_testo(MEDIO)
@@ -302,6 +317,15 @@ def main():
               f"{round(f1.origin.y + f1.size.height)} → {round(f2.origin.y + f2.size.height)}")
     controlla("crescendo: il centro resta fermo",
               abs((f1.origin.x + f1.size.width / 2) - (f2.origin.x + f2.size.width / 2)) <= 1)
+
+    # cambiando forma cambia il raggio (nocciola 22, distesa 32): tinta e filo
+    # non lo ereditano da nessuno. Se non li si riaggiorna, agli angoli
+    # spuntano quattro quadrati di tinta e il filo taglia dritto.
+    atteso = min(f2.size.height / 2.0, P.RAGGIO_MAX)
+    controlla("tinta e filo seguono il raggio",
+              p.contenuto._raggio == atteso and p.filo._raggio == atteso
+              and round(p.filo.frame().size.width) == round(f2.size.width),
+              f"raggio {atteso}")
 
     # l'anteprima mentre parli non scrive testo (ticket 02)
     p.imposta_testo("")

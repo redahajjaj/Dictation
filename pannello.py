@@ -16,10 +16,14 @@ niente viene scritto su disco.
 Si trascina da qualsiasi punto (tranne il testo e le icone) e non sparisce quando
 lavori altrove.
 
-Il vetro è quello vero di macOS 26 (`NSGlassEffectView`, tinta grigia bianco 0,88
-@80%): **si adatta al fondo**, quindi sopra un'app scura diventa scuro. Per questo
-i colori vengono tutti dal sistema (`labelColor` e compagnia fanno il flip da
-soli): l'unica tinta scritta a mano è il rosso del REC.
+Il vetro è quello vero di macOS 26 (`NSGlassEffectView`, stile Regular): **si
+adatta al fondo**, quindi sopra un'app scura diventa scuro. Per questo i colori
+vengono tutti dal sistema (`labelColor` e compagnia fanno il flip da soli):
+l'unica tinta scritta a mano è il rosso del REC.
+
+La tinta della capsula e il filo di luce sul bordo li dipingiamo noi, dentro il
+contentView (`VistaVetro` e `Filo`). **Non** con `setTintColor_`: quella macOS la
+scarta quando la finestra non è key, e la barra cambiava colore a ogni clic.
 """
 from __future__ import annotations
 
@@ -120,7 +124,20 @@ ONDA_A = 22
 X_ONDA, X_CRONO, L_CRONO = 48, 182, 44
 NOCC_REGISTRA_L = 248        # misurata sul prototipo, approvata il 24/8
 
-TINTA_VETRO = (0.88, 0.80)   # variante B del ticket 01: si stacca da ogni fondo
+# La tinta della capsula. NON è più `setTintColor_` del vetro: macOS la butta
+# via quando la finestra non è key e la rimpiazza con un neutro, così al primo
+# clic la barra saltava di 74 livelli di grigio (misurato: 129 → 203) e il
+# contrasto del testo crollava a 1,6:1 — illeggibile. Dipinta a mano dentro
+# `contenuto` il salto è 4 livelli, invisibile.
+#
+# L'alfa è bassa apposta: **meno tinta = più leggibile**, non il contrario. Dove
+# il testo è chiaro, schiarire la capsula ce lo affoga. Misurato su 3 fondi × 2
+# stati (bianco · scuro · foto): α0,35 → 2,6-6,3:1 · α0,28 → 2,9-6,4 ·
+# **α0,20 → 3,5-6,5** · α0,16 → 3,8-7,8, ma il vetro comincia a perdere corpo.
+TINTA_VETRO = (0.96, 0.20)
+# Il filo di luce sul bordo: è la leva che fa leggere «vetro» invece di
+# «rettangolo grigio». Oltre 1,5pt diventa un contorno disegnato, non vetro.
+FILO_L, FILO_ALFA = 1.0, 0.65
 SILENZIO_ONDA = 0.02
 
 FONT_TESTO = NSFont.systemFontOfSize_weight_(13.5, NSFontWeightRegular)
@@ -188,6 +205,67 @@ class VistaTrascina(NSView):
 
     def mouseDown_(self, evento):
         self.window().performWindowDragWithEvent_(evento)
+
+
+class VistaVetro(VistaTrascina):
+    """Il contenuto dentro il vetro — e la superficie che ci dipinge la tinta.
+
+    La tinta sta qui e non su `setTintColor_` del vetro perché AppKit quella la
+    scarta appena la finestra non è key (vedi TINTA_VETRO). Disegnata qui invece
+    è sempre la stessa, key o non key.
+
+    Si arrotonda da sola: `clipsToBounds` di NSGlassEffectView è False, quindi il
+    contentView non viene ritagliato dagli angoli tondi della capsula — senza il
+    raggio, agli angoli spunterebbero quattro quadrati di tinta."""
+
+    @objc.python_method
+    def prepara(self, raggio):
+        self._raggio = raggio
+        return self
+
+    @objc.python_method
+    def imposta_raggio(self, raggio):
+        if raggio != self._raggio:
+            self._raggio = raggio
+        self.setNeedsDisplay_(True)
+
+    def drawRect_(self, _r):
+        bianco, alfa = TINTA_VETRO
+        NSColor.colorWithWhite_alpha_(bianco, alfa).setFill()
+        NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            self.bounds(), self._raggio, self._raggio
+        ).fill()
+
+
+class Filo(NSView):
+    """Il filo di luce lungo il bordo della capsula.
+
+    Copre tutta la barra, quindi `hitTest_` deve tornare None: senza, si
+    mangerebbe ogni clic e ammazzerebbe il trascinamento e i bottoni."""
+
+    @objc.python_method
+    def prepara(self, raggio):
+        self._raggio = raggio
+        return self
+
+    @objc.python_method
+    def imposta_raggio(self, raggio):
+        self._raggio = raggio
+        self.setNeedsDisplay_(True)
+
+    def hitTest_(self, _p):
+        return None
+
+    def drawRect_(self, _r):
+        b = self.bounds()
+        r = max(0.0, self._raggio - FILO_L / 2.0)
+        p = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+            NSMakeRect(FILO_L / 2.0, FILO_L / 2.0,
+                       b.size.width - FILO_L, b.size.height - FILO_L), r, r
+        )
+        p.setLineWidth_(FILO_L)
+        NSColor.colorWithWhite_alpha_(1.0, FILO_ALFA).setStroke()
+        p.stroke()
 
 
 class Onda(NSView):
@@ -295,9 +373,10 @@ class Pannello(NSObject):
 
     @objc.python_method
     def _costruisci(self):
-        self.contenuto = VistaTrascina.alloc().initWithFrame_(
+        raggio = min(NOCC_A / 2.0, RAGGIO_MAX)
+        self.contenuto = VistaVetro.alloc().initWithFrame_(
             NSMakeRect(0, 0, NOCC_REGISTRA_L, NOCC_A)
-        )
+        ).prepara(raggio)
 
         # sinistra: mic quando puoi parlare, stop mentre registri, il segnale
         # quando qualcosa non va. È sempre la stessa casella: cambia solo cosa c'è dentro
@@ -358,6 +437,12 @@ class Pannello(NSObject):
         for b in (self.b_svuota, self.b_copia, self.menu_btn):
             self.contenuto.addSubview_(b)
 
+        # per ULTIMO: sotto qualsiasi altra vista il filo sparirebbe
+        self.filo = Filo.alloc().initWithFrame_(
+            NSMakeRect(0, 0, NOCC_REGISTRA_L, NOCC_A)
+        ).prepara(raggio)
+        self.contenuto.addSubview_(self.filo)
+
         # -- la finestra: vetro vero, niente cornice ---------------------------
         self.finestra = BarraPanel.alloc().initWithContentRect_styleMask_backing_defer_(
             NSMakeRect(0, 0, NOCC_REGISTRA_L, NOCC_A),
@@ -381,9 +466,12 @@ class Pannello(NSObject):
         )
         # senza questo, chiuderla la distrugge e riaprirla fa crashare l'app
         self.finestra.setReleasedWhenClosed_(False)
-        # è l'aspetto con cui i contrasti sono stati misurati e approvati (ticket
-        # 05). Non impedisce al vetro di scurirsi sul fondo scuro: quello lo
-        # decide NSGlassEffectView, e labelColor lo segue da solo.
+        # ⚠️ Dentro il vetro questa riga NON comanda: NSGlassEffectView
+        # sovrascrive l'appearance del proprio sottoalbero (misurato: con la
+        # finestra forzata a VibrantLight, su fondo scuro il campo di testo
+        # legge VibrantDark). Chi decide i colori del contenuto è
+        # `_adaptiveAppearance` del vetro. Resta perché vale per il ripiego
+        # NSVisualEffectView di macOS < 26.
         self.finestra.setAppearance_(
             NSAppearance.appearanceNamed_(NSAppearanceNameVibrantLight)
         )
@@ -418,9 +506,11 @@ class Pannello(NSObject):
         if NSGlassEffectView is not None:
             v = NSGlassEffectView.alloc().initWithFrame_(NSMakeRect(0, 0, L, A))
             v.setCornerRadius_(raggio)
-            v.setStyle_(0)          # Regular (1 = Clear: mai mescolarli)
-            bianco, alfa = TINTA_VETRO
-            v.setTintColor_(NSColor.colorWithWhite_alpha_(bianco, alfa))
+            # Regular. Clear (1) non è «vetro più forte», è vetro più sottile: e
+            # il salto key/non-key passa da +41 a +90. Mai mescolarli.
+            v.setStyle_(0)
+            # Niente setTintColor_: la tinta la dipinge `contenuto` (VistaVetro).
+            # Questa riga era l'unica causa del cambio di colore al clic.
             v.setContentView_(self.contenuto)
             return v
         # macOS senza Liquid Glass: lo sfocato di prima, con gli angoli tondi
@@ -561,6 +651,11 @@ class Pannello(NSObject):
             self.vetro.setCornerRadius_(raggio)
         else:
             self.vetro.layer().setCornerRadius_(raggio)
+        # il raggio cambia con la forma (nocciola 22, distesa 32): tinta e filo
+        # non lo ereditano da nessuno, glielo si deve ridire a ogni cambio
+        self.contenuto.imposta_raggio(raggio)
+        self.filo.setFrame_(NSMakeRect(0, 0, L, A))
+        self.filo.imposta_raggio(raggio)
 
         self._ridimensiona(L, A)
 
