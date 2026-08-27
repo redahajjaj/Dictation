@@ -50,6 +50,7 @@ from pannello import (
     PRONTO,
     REGISTRA,
     Pannello,
+    _simbolo,
 )
 
 
@@ -344,7 +345,11 @@ def scrivi_storico(grezzo: str, pulito: str, modo: str, secondi: float) -> None:
         f.write(voce)
 
 
-ICONE = {PRONTO: "🎙", ELABORA: "⏳"}
+# Nella barra dei menu ci va un simbolo di sistema, non un'emoji: l'emoji la
+# disegna macOS a colori e stona fra le altre icone, che sono tutte monocrome e
+# seguono chiaro/scuro. Questi sono nomi SF Symbol, resi template da _simbolo().
+ICONA_DEFAULT = "mic"
+ICONE = {PRONTO: "mic", ELABORA: "ellipsis.circle", REGISTRA: "mic.fill"}
 NOMI_MODO = {"pulito": "testo pulito", "prompt": "istruzione", "grezzo": "grezzo"}
 
 # La scorciatoia si cambia dal .env, e l'app deve dire quella VERA: scriverla a
@@ -372,7 +377,9 @@ def etichetta_tasti(spec: str) -> str:
 
 class App(rumps.App):
     def __init__(self):
-        super().__init__("🎙", quit_button=None)
+        # titolo vuoto: l'icona vera è un NSImage template, la mette
+        # _aggancia_icona appena il bottone della barra esiste
+        super().__init__("", quit_button=None)
         self.cfg = carica_env()
         # una sola fonte per la scorciatoia: da qui discendono l'invito, i
         # tooltip della barra e l'ascolto vero dei tasti (più in basso)
@@ -398,6 +405,9 @@ class App(rumps.App):
         self._etichetta_prima = self.invito
         self._clic = None
         self._icona_agganciata = False
+        self._bottone_barra = None
+        self._icona_ora = ""      # l'ultimo simbolo messo: evita di rifare
+                                  # un NSImage 10 volte al secondo nel tick
 
         # il menu ora è secondario: si apre col tasto destro sull'icona o dal •••
         self.m_pulito = rumps.MenuItem("Testo pulito", callback=self.scegli_modo)
@@ -444,10 +454,22 @@ class App(rumps.App):
             bottone.setTarget_(self._clic)
             bottone.setAction_("clic:")
             bottone.sendActionOn_(NSEventMaskLeftMouseUp | NSEventMaskRightMouseUp)
+            self._bottone_barra = bottone
+            self._mostra_icona(ICONE.get(self._stato, ICONA_DEFAULT))
             self._icona_agganciata = True
         except Exception as e:
             print(f"icona non agganciata: {e}", file=sys.stderr)
             self._icona_agganciata = True   # inutile riprovare a ogni giro
+
+    def _mostra_icona(self, nome: str):
+        """Mette il simbolo nella barra dei menu, solo se è cambiato."""
+        if nome == self._icona_ora or self._bottone_barra is None:
+            return
+        im = _simbolo(nome, 16)      # 16 = la taglia delle icone di sistema accanto
+        if im is None:          # SF Symbol assente su questa versione di macOS
+            return
+        self._bottone_barra.setImage_(im)
+        self._icona_ora = nome
 
     # -- ingressi -------------------------------------------------------------
     def _da_scorciatoia(self):
@@ -551,12 +573,16 @@ class App(rumps.App):
         if self.registrando:
             secondi = int(time.time() - self._inizio)
             orologio = f"{secondi // 60}:{secondi % 60:02d}"
-            self.title = f"🔴 {orologio}"
+            # mentre registra: microfono pieno + il cronometro come testo.
+            # Il testo della barra dei menu è già monocromo, l'emoji no.
+            self._mostra_icona(ICONE[REGISTRA])
+            self.title = orologio
             self._etichetta = f"{orologio}   ·   premi di nuovo per fermare"
             if secondi >= DURATA_MAX:
                 self._alterna()
         else:
-            self.title = ICONE.get(self._stato, "🎙")
+            self._mostra_icona(ICONE.get(self._stato, ICONA_DEFAULT))
+            self.title = ""
 
         if self._etichetta == ATTESA and time.time() >= self._fine_attesa:
             self._etichetta = self._etichetta_prima
