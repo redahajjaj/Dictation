@@ -1363,8 +1363,58 @@ class Pannello(NSObject):
         if testo is not None:
             self.imposta_testo(testo)
         self._posa(comparsa)
+        # Solo alla comparsa vera: `apri()` viene chiamata anche su una barra
+        # già aperta, a ogni fine dettatura — lì non c'è niente da far nascere.
+        if not comparsa or not self._animato():
+            self.finestra.makeKeyAndOrderFront_(None)
+            NSApp.activateIgnoringOtherApps_(True)
+            return
+
+        pieno = self.finestra.frame()
+        goccia = self._goccia(pieno)
+        self._volo = "apre"
+        self._giro += 1
+        mio = self._giro
+        self._animazioni += 1
+        self._atteso = (round(goccia.origin.x), round(goccia.origin.y))
+        self.finestra.setHasShadow_(False)
+        self.finestra.setFrame_display_(goccia, False)
+        self._pelle(GOCCIA_L, GOCCIA_A)
+        for v in self._contenuti():
+            v.setAlphaValue_(0.0)
         self.finestra.makeKeyAndOrderFront_(None)
         NSApp.activateIgnoringOtherApps_(True)
+
+        def fine():
+            self._animazioni = max(0, self._animazioni - 1)
+            if mio != self._giro:
+                return                   # tagliato da una chiusura: lascia stare
+            self._volo = None
+            # il frame SALVATO, non il ricalcolo: stessa deriva del risucchio
+            self.finestra.setFrame_display_(pieno, False)
+            o = self.finestra.frame().origin
+            self._atteso = (round(o.x), round(o.y))
+            self.finestra.setHasShadow_(True)
+            self.finestra.invalidateShadow()
+            NSAnimationContext.beginGrouping()
+            NSAnimationContext.currentContext().setDuration_(DURATA_COMPARSA)
+            for v in self._contenuti():
+                if not v.isHidden():
+                    v.animator().setAlphaValue_(1.0)
+            NSAnimationContext.endGrouping()
+            # NON si azzera la firma: la geometria è già giusta, e forzarla
+            # farebbe ripartire un volo verso la misura in cui siamo già
+            self._ridisegna()
+
+        NSAnimationContext.beginGrouping()
+        ctx = NSAnimationContext.currentContext()
+        ctx.setDuration_(DURATA_TRANSIZIONE)
+        if CURVA is not None:
+            ctx.setTimingFunction_(CURVA)   # arrivare si fa frenando: ease-out
+        ctx.setCompletionHandler_(fine)
+        self._pelle(pieno.size.width, pieno.size.height, True)
+        self.finestra.animator().setFrame_display_(pieno, True)
+        NSAnimationContext.endGrouping()
 
     @objc.python_method
     def chiudi(self):
