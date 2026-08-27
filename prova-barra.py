@@ -502,6 +502,64 @@ def main():
         # 4. una transizione non deve far credere alla barra di essere trascinata
         controlla("il volo non conta come trascinamento", not p._spostata)
 
+        # --- il segno ⊖ e il risucchio ---------------------------------------
+        p.imposta_testo(LUNGO)
+        p.aggiorna(P.PRONTO, "34 parole")
+        attendi(0.5)
+        f = p.b_riduci.frame()
+        A = p.finestra.frame().size.height
+        controlla("il segno c'è nella distesa", not p.b_riduci.isHidden())
+        # 🔴 il tappo sinistro è un semicerchio di raggio 32 centrato in
+        # (32, A-32), e NIENTE ritaglia il tondo: un riquadro che ne esce viene
+        # disegnato sul desktop. Questo controlla i quattro angoli, non il
+        # rettangolo — è il difetto che l'occhio non becca su un fondo scuro.
+        import math
+        cx, cy, r = 32.0, A - 32.0, 32.0
+        fuori = [(x, y) for x in (f.origin.x, f.origin.x + f.size.width)
+                 for y in (f.origin.y, f.origin.y + f.size.height)
+                 if math.hypot(x - cx, y - cy) > r]
+        controlla("il segno sta dentro l'arco della capsula", not fuori,
+                  f"franco {round(r - max(math.hypot(x - cx, y - cy) for x in (f.origin.x, f.origin.x + f.size.width) for y in (f.origin.y, f.origin.y + f.size.height)), 2)}")
+        controlla("il segno non si sovrappone al microfono",
+                  f.origin.y >= p.b_azione.frame().origin.y + p.b_azione.frame().size.height,
+                  f"segno y={round(f.origin.y)} · mic finisce a {round(p.b_azione.frame().origin.y + p.b_azione.frame().size.height)}")
+
+        pieno = p.finestra.frame()
+        p.chiudi()
+        attendi(0.08)
+        # 🔴 in volo la barra è ancora a video, ma per il resto del mondo è già
+        # chiusa: senza questo il battito a 10 Hz le rifà il layout addosso e la
+        # fa atterrare visibile invece di sparire
+        controlla("in risucchio la barra si dichiara chiusa", not p.e_aperto())
+        mezzo = p.finestra.frame().size.width
+        controlla("in risucchio si sta stringendo", mezzo < pieno.size.width - 50,
+                  f"{round(pieno.size.width)} → {round(mezzo)}")
+        controlla("in risucchio il bordo alto resta fermo",
+                  abs((p.finestra.frame().origin.y + p.finestra.frame().size.height)
+                      - (pieno.origin.y + pieno.size.height)) <= 1)
+        attendi(0.6)
+        controlla("finito il risucchio la barra è sparita",
+                  not p.finestra.isVisible() and p._volo is None)
+        dopo = p.finestra.frame()
+        # 🔴 la deriva: ricavando il frame dalla goccia invece di rimettere
+        # quello salvato, con una larghezza dispari si perde un punto per giro
+        controlla("il frame torna identico, senza derive",
+                  (round(dopo.origin.x), round(dopo.size.width))
+                  == (round(pieno.origin.x), round(pieno.size.width)),
+                  f"x {round(pieno.origin.x)} → {round(dopo.origin.x)}")
+
+        # riaprire a metà volo taglia il risucchio: la barra resta
+        p.apri()
+        attendi(0.4)
+        p.chiudi()
+        attendi(0.08)
+        p.apri()
+        attendi(0.5)
+        controlla("riaprire a metà risucchio la salva",
+                  p.finestra.isVisible() and p._volo is None
+                  and p.finestra.frame().size.width > 200,
+                  f"larga {round(p.finestra.frame().size.width)}")
+
         # 5. spegnendo l'animazione si torna al salto secco, senza volo
         P.ANIMA = False
         p.imposta_testo("")

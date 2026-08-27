@@ -183,6 +183,24 @@ ANIMA = True
 DURATA_TRANSIZIONE = 0.30
 DURATA_COMPARSA = 0.16   # la dissolvenza del contenuto, dopo che la capsula è
                          # arrivata: più corta del volo, o sembra un ritardo
+
+# Il risucchio: la barra si accartoccia in una goccia sul proprio bordo alto e
+# sparisce. Quando è a casa, il suo bordo alto È già sotto l'icona — quindi
+# accartocciarsi sul posto È risucchiarsi sotto il microfono, senza un ramo in
+# più; e quando l'hai trascinata lontano si chiude dov'è, che è l'unica cosa
+# sensata: attraversare lo schermo in un quarto di secondo non è una goccia.
+GOCCIA_L, GOCCIA_A = 26.0, 4.0
+DURATA_RISUCCHIO = 0.26     # uscire è più svelto che entrare (0,30)
+DURATA_SPARIZIONE = 0.12    # il contenuto se ne va nella prima metà del volo
+# 🔴 La curva è l'OPPOSTO di CURVA. Quella è una ease-out: a un quarto del tempo
+# ha già fatto il 61% della strada — la barra sparirebbe di scatto e poi
+# resterebbe ferma. Questa è una ease-in: al 25% ha fatto il 9%, parte piano e
+# accelera. È l'acqua che se ne va giù.
+try:
+    CURVA_RISUCCHIO = objc.lookUpClass("CAMediaTimingFunction").alloc(
+    ).initWithControlPoints____(0.42, 0.0, 1.0, 1.0)
+except Exception:
+    CURVA_RISUCCHIO = None
 try:
     CURVA = objc.lookUpClass("CAMediaTimingFunction").alloc().initWithControlPoints____(
         0.2, 0.0, 0.0, 1.0)
@@ -300,7 +318,19 @@ class BarraPanel(NSPanel):
         return False
 
     def cancelOperation_(self, _s):
-        self.orderOut_(None)      # Esc chiude la barra
+        """Esc deve passare dall'unico imbuto di chiusura.
+
+        Prima faceva `orderOut_` di suo e scavalcava `Pannello.chiudi()`: da
+        quando la chiusura è un volo, Esc chiuderebbe di netto mentre il ✕ e il
+        segno si risucchiano — e premuto a metà volo lascerebbe lo stato del
+        volo acceso per sempre.
+        (il rimando al padrone è un ciclo di ritenzione voluto: l'app non
+        rilascia mai il pannello)"""
+        p = getattr(self, "padrone", None)
+        if p is not None:
+            p.chiudi()
+        else:
+            self.orderOut_(None)
 
 
 class VistaTrascina(NSView):
@@ -513,6 +543,16 @@ class Pannello(NSObject):
         # a 10 Hz può farne partire una seconda mentre la prima vola, e il
         # completion handler della prima aprirebbe il cancello troppo presto.
         self._animazioni = 0
+        # Quale volo di comparsa/sparizione è in corso: None | "chiude" | "apre".
+        # Diverso da _animazioni, che conta le transizioni di FORMA e può valere
+        # più di uno apposta: il volo invece è uno solo.
+        self._volo = None
+        # 🔴 Token di generazione. Il completion handler di NSAnimationContext
+        # NON si annulla: parte lo stesso a fine durata. Misurato: dopo aver
+        # congelato un volo, il completion vecchio ha fatto orderOut_ e si è
+        # ripreso la barra appena riaperta. Cambiare questo numero lo rende
+        # innocuo. Il congelamento da solo NON basta.
+        self._giro = 0
         return self
 
     # -- costruzione ----------------------------------------------------------
@@ -579,6 +619,18 @@ class Pannello(NSObject):
 
         self.b_chiudi = self._icona("xmark", 11, "chiudiClic:", "Chiudi", lato=24)
         self.contenuto.addSubview_(self.b_chiudi)
+
+        # Il segno che richiude, in alto a sinistra: solo nella distesa. Nella
+        # nocciola sopra il microfono restano 8 punti — misurato, non ci sta
+        # nessun riquadro utile. Riquadro 16 e non LATO_ICONA=28 perché il tappo
+        # sinistro della distesa è un semicerchio pieno (raggio 32 = metà
+        # altezza): a 28 gli angoli uscirebbero dal vetro, e 🔴 il vetro non
+        # ritaglia — clipsToBounds di NSGlassEffectView è False e quello del
+        # contenuto ritaglia al RETTANGOLO, quindi un glifo fuori dalla capsula
+        # finisce disegnato sul desktop.
+        self.b_riduci = self._icona("minus.circle", 12, "riduciClic:",
+                                    "Riduci (Esc)", lato=16)
+        self.contenuto.addSubview_(self.b_riduci)
 
         # il testo: resta modificabile, perché «Copia» copia quello che c'è
         # adesso nel campo (dettatura.py) — se l'hai corretto, vale la correzione
@@ -660,6 +712,7 @@ class Pannello(NSObject):
         )
         # senza questo, chiuderla la distrugge e riaprirla fa crashare l'app
         self.finestra.setReleasedWhenClosed_(False)
+        self.finestra.padrone = self   # Esc: cancelOperation_ ci passa chiudi()
         # ⚠️ Dentro il vetro questa riga NON comanda: NSGlassEffectView
         # sovrascrive l'appearance del proprio sottoalbero (misurato: con la
         # finestra forzata a VibrantLight, su fondo scuro il campo di testo
@@ -804,6 +857,7 @@ class Pannello(NSObject):
             (self.crono, forma == REGISTRA),
             (self.messaggio, nocciola and forma != REGISTRA),
             (self.b_chiudi, forma == ERRORE),
+            (self.b_riduci, not nocciola),
             (self.scroll, not nocciola),
             (self.conteggio, not nocciola),
             (self.nota, bool(nota)),
@@ -873,6 +927,15 @@ class Pannello(NSObject):
             if forma == ERRORE:
                 telaio(self.b_chiudi, NSMakeRect(L - 36, (NOCC_A - 24) / 2.0, 24, 24))
         else:
+            # Il segno, sopra il microfono e nella sua stessa colonna (centro
+            # x = 32, come b_azione: 18 + 28/2). È l'unico punto in alto a
+            # sinistra dove un riquadro ci sta INTERO dentro la capsula: il
+            # tappo è un semicerchio di raggio 32 centrato in (32, A-32), e i
+            # quattro angoli di questo riquadro ne distano al massimo 31,05 —
+            # 0,95 di franco, uguale per ogni altezza della barra.
+            # Il bordo basso tocca esattamente il bordo alto del mic (A-18):
+            # adiacenti, zero sovrapposizione di clic.
+            telaio(self.b_riduci, NSMakeRect(24, A - 18, 16, 16))
             largo = L - FISSO
             blocco = h_testo + (H_NOTA if nota else 0)
             y = (A - blocco) / 2.0
@@ -1006,7 +1069,10 @@ class Pannello(NSObject):
     def _ridisegna(self):
         """Chiamata a ogni battito (10 volte al secondo): rifà il layout solo se
         la forma è davvero cambiata, e per il resto tocca solo le scritte."""
-        if self.finestra is None:
+        # cintura oltre alle bretelle di e_aperto: imposta_testo, segnala_copia
+        # e il ripristino della copia arrivano qui senza passare da lì, e in
+        # mezzo a un volo rifarebbero il layout sopra la goccia
+        if self.finestra is None or self._volo is not None:
             return
         forma = self._forma()
         L, A, h_testo, nota = self._misure(forma)
@@ -1096,7 +1162,16 @@ class Pannello(NSObject):
     # -- apertura / chiusura --------------------------------------------------
     @objc.python_method
     def e_aperto(self) -> bool:
-        return self.finestra is not None and self.finestra.isVisible()
+        """🔴 Durante il risucchio la finestra è ancora a video — la sparizione
+        vera sta in fondo al volo — ma per il resto del mondo la barra è già
+        chiusa. Senza questa riga il battito a 10 Hz continua a chiamare
+        `aggiorna()` e un cambio di forma a metà volo VINCE: la barra atterra
+        visibile a misura di nocciola invece di sparire. Non è teoria: quando
+        l'errore scade, l'app cambia l'etichetta e chiama `chiudi()` nello
+        stesso battito.
+        Mentre si APRE invece resta True: lì la barra c'è davvero."""
+        return (self.finestra is not None and self.finestra.isVisible()
+                and self._volo != "chiude")
 
     @objc.python_method
     def _ancora_icona(self):
@@ -1164,6 +1239,51 @@ class Pannello(NSObject):
         trascinata di Reda."""
         self._atteso = (round(r.origin.x), round(r.origin.y))
         self.finestra.setFrameOrigin_(r.origin)
+
+    # -- il risucchio ---------------------------------------------------------
+    @objc.python_method
+    def _goccia(self, pieno):
+        """Dove va a finire la barra chiudendosi: stesso centro, sul suo bordo alto.
+
+        NON si chiede all'icona dove sta: la sua posizione può non esserci
+        proprio nell'istante del volo (nei primi secondi dopo l'avvio, o con un
+        gestore di menubar di mezzo). E non serve — quando la barra è a casa il
+        suo bordo alto è già appena sotto l'icona, quindi accartocciarsi sul
+        proprio bordo alto È risucchiarsi sotto il microfono."""
+        cx = pieno.origin.x + pieno.size.width / 2.0
+        alto = pieno.origin.y + pieno.size.height
+        return NSMakeRect(cx - GOCCIA_L / 2.0, alto - GOCCIA_A, GOCCIA_L, GOCCIA_A)
+
+    @objc.python_method
+    def _pelle(self, L, A, anima=False):
+        """Le quattro viste che formano la capsula e devono seguire la finestra.
+
+        🔴 Misurato: la radice segue da sola (è il contentView), ma vetro,
+        contenuto e filo NO. Animando la sola finestra, a metà volo la finestra
+        è 133x16 e il vetro ancora 602x64: si vede un quadrato con un angolo
+        tondo. Le maschere di autoresizing sono vietate qui (fanno atterrare la
+        finestra nel posto sbagliato dopo un rimpicciolimento grosso): si fa a
+        mano, come fa `telaio` in _applica."""
+        r = NSMakeRect(0, 0, L, A)
+        for v in (self.contenuto, self.radice, self.vetro, self.filo):
+            (v.animator() if anima else v).setFrame_(r)
+
+    @objc.python_method
+    def _contenuti(self):
+        """Quello che sta DENTRO la capsula, e che sparisce mentre si richiude.
+
+        Non `contenuto` e non il filo: quelli SONO la capsula, e dissolverli
+        farebbe arrivare una goccia scolorita invece che di vetro."""
+        return (self.b_azione, self.onda, self.crono, self.messaggio,
+                self.b_chiudi, self.b_riduci, self.scroll, self.conteggio,
+                self.nota, self.b_svuota, self.b_copia, self.menu_btn)
+
+    @objc.python_method
+    def _animato(self) -> bool:
+        """Stessa regola di _ridisegna: le prove spengono ANIMA, e chi ha chiesto
+        meno movimento a macOS va rispettato anche qui."""
+        return (ANIMA and not NSWorkspace.sharedWorkspace()
+                .accessibilityDisplayShouldReduceMotion())
 
     @objc.python_method
     def _casa(self):
@@ -1236,6 +1356,10 @@ class Pannello(NSObject):
         comparsa = not self.e_aperto()
         if self.finestra is None:
             self._costruisci()
+        # 🔴 PRIMA di tutto il resto: `setFrameOrigin_` chiamata durante
+        # un'animazione viene ZITTITA, e la barra si posizionerebbe dove decide
+        # il volo vecchio invece che dove diciamo noi.
+        self._taglia_volo()
         if testo is not None:
             self.imposta_testo(testo)
         self._posa(comparsa)
@@ -1244,8 +1368,118 @@ class Pannello(NSObject):
 
     @objc.python_method
     def chiudi(self):
-        if self.finestra is not None:
+        """La barra si accartoccia in una goccia sul suo bordo alto e sparisce.
+
+        È l'unica porta di chiusura: ci passano il segno ⊖, il ✕ dell'errore,
+        Esc, il clic sull'icona e l'errore che si ritira da solo."""
+        if self.finestra is None:
+            return
+        if self._volo == "chiude":
+            return                       # già in volo: il battito non lo rilancia
+        pieno = self.finestra.frame()
+        if not self.finestra.isVisible() or not self._animato():
             self.finestra.orderOut_(None)
+            return
+        goccia = self._goccia(pieno)
+        self._volo = "chiude"
+        self._giro += 1
+        mio = self._giro
+        self._animazioni += 1            # cintura per il cancello di finestraMossa_
+        self._atteso = (round(goccia.origin.x), round(goccia.origin.y))
+        self._ferma_alone()
+        # 🔴 l'ombra è calcolata sul RETTANGOLO della finestra: in volo si
+        # vedrebbe un alone squadrato attorno alla capsula. Ricalcolarla a ogni
+        # fotogramma non basta, spegnerla sì.
+        self.finestra.setHasShadow_(False)
+        self.finestra.invalidateShadow()
+
+        # il contenuto se ne va nella prima metà del volo: quando la capsula è
+        # già stretta non c'è più niente dentro da schiacciare
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.currentContext().setDuration_(DURATA_SPARIZIONE)
+        for v in self._contenuti():
+            if not v.isHidden():
+                v.animator().setAlphaValue_(0.0)
+        NSAnimationContext.endGrouping()
+
+        def fine():
+            # il decremento PRIMA del controllo sul token: _taglia_volo non
+            # decrementa, e solo così il contatore resta in pari
+            self._animazioni = max(0, self._animazioni - 1)
+            if mio != self._giro:
+                return                   # tagliato da apri(): non nascondere niente
+            self._volo = None
+            self._spegni(pieno)
+
+        NSAnimationContext.beginGrouping()
+        ctx = NSAnimationContext.currentContext()
+        ctx.setDuration_(DURATA_RISUCCHIO)
+        if CURVA_RISUCCHIO is not None:
+            ctx.setTimingFunction_(CURVA_RISUCCHIO)
+        ctx.setCompletionHandler_(fine)
+        self._pelle(GOCCIA_L, GOCCIA_A, True)
+        self.finestra.animator().setFrame_display_(goccia, True)
+        NSAnimationContext.endGrouping()
+
+    @objc.python_method
+    def _spegni(self, pieno):
+        """Nasconde la barra e la rimette a misura piena, pronta a riaprirsi.
+
+        Non è cosmetico: `apri()` non ricostruisce niente da sola — se il testo
+        è lo stesso `imposta_testo` esce subito, e `_ridisegna` vede la firma
+        invariata. Una barra lasciata a 26x4 riaprirebbe come un moncone PER
+        SEMPRE. L'unico attrezzo che la rifà è azzerare la firma.
+
+        🔴 E il frame si RIMETTE QUELLO SALVATO, non si ricalcola dalla goccia:
+        con una larghezza dispari il mezzo punto del centro si perde a ogni
+        giro, e la barra scivola a sinistra di un punto a ogni chiusura, per
+        sempre. Non si vede finché sta a casa (che la ricentra a ogni comparsa);
+        appena la trascini, la deriva si accumula in eterno.
+
+        🔴 E va fatto DOPO orderOut_: a finestra nascosta `_ridisegna` non anima,
+        quindi il frame secco tiene."""
+        self.finestra.orderOut_(None)
+        self.finestra.setFrame_display_(pieno, False)
+        o = self.finestra.frame().origin
+        self._atteso = (round(o.x), round(o.y))
+        for v in self._contenuti():
+            v.setAlphaValue_(1.0)
+        self.finestra.setHasShadow_(True)
+        self._firma = None
+        self._ridisegna()
+        self.finestra.invalidateShadow()
+
+    @objc.python_method
+    def _taglia_volo(self):
+        """Ferma di netto un volo in corso: due clic rapidi sull'icona, o una
+        dettatura che finisce mentre la barra si sta chiudendo.
+
+        🔴 DUE MOSSE, E SERVONO ENTRAMBE — misurate una per una:
+        1. il TOKEN. Il completion handler non si annulla: parte lo stesso a
+           fine durata. Misurato: congelato il volo, il completion vecchio ha
+           comunque nascosto la barra appena riaperta.
+        2. il CONGELAMENTO a durata 0 verso il frame CORRENTE. Un setFrame
+           diretto NON ferma l'animator: misurato, chiesto il pieno a metà volo
+           la finestra è atterrata lo stesso alla goccia.
+        Per lo stesso motivo azzerare la firma va fatto DOPO il congelamento,
+        mai prima: da sola prende la strada del frame secco, che viene
+        inghiottito."""
+        if self._volo is None:
+            return
+        self._giro += 1                  # il completion vecchio diventa innocuo
+        self._volo = None
+        ora = self.finestra.frame()
+        pelle = self.vetro.frame()
+        NSAnimationContext.beginGrouping()
+        NSAnimationContext.currentContext().setDuration_(0.0)
+        self._pelle(pelle.size.width, pelle.size.height, True)
+        self.finestra.animator().setFrame_display_(ora, True)
+        NSAnimationContext.endGrouping()
+        self.finestra.setHasShadow_(True)
+        for v in self._contenuti():
+            v.setAlphaValue_(1.0)
+        self._firma = None
+        self._ridisegna()
 
     # -- azioni (selettori Objective-C) ---------------------------------------
     @objc.python_method
@@ -1319,6 +1553,11 @@ class Pannello(NSObject):
             self.app.dal_bottone()
 
     def chiudiClic_(self, _s):
+        self.chiudi()
+
+    def riduciClic_(self, _s):
+        # stessa porta del ✕, del clic sull'icona e dell'errore che scade: così
+        # il risucchio lo ereditano tutte e quattro le strade, non solo questa
         self.chiudi()
 
     def copia_(self, _s):
