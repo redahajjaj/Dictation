@@ -4,6 +4,13 @@ __pycache__/
 storico.md
 build/
 dist/
+.dettatura.lock
 
 # gli scatti grezzi della barra vera: 15 MB, e la tavola montata basta
 .scratch/barra-liquid-glass/prototipo/barra-vera/
+
+# gli intermedi di fai-icona.py: la sorgente e l'.icns si tengono, il resto no
+_anteprima-bundle/
+anteprima-matita-piena.png
+provino-matita-piena.png
+tavola-matita-piena.png

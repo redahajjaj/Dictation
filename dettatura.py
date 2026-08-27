@@ -12,6 +12,7 @@ tranne l'audio a Groq per la trascrizione.
 """
 from __future__ import annotations
 
+import fcntl
 import os
 import queue
 import re
@@ -390,10 +391,15 @@ def etichetta_tasti(spec: str) -> str:
 
 
 class App(rumps.App):
+    # l'app viva, per chi la deve raggiungere da fuori: il delegate che riceve
+    # il clic sull'icona nel Dock lo costruisce rumps e non ci conosce
+    _istanza = None
+
     def __init__(self):
         # titolo vuoto: l'icona vera è un NSImage template, la mette
         # _aggancia_icona appena il bottone della barra esiste
         super().__init__("", quit_button=None)
+        App._istanza = self
         self.cfg = carica_env()
         # una sola fonte per la scorciatoia: da qui discendono l'invito, i
         # tooltip della barra e l'ascolto vero dei tasti (più in basso)
@@ -875,8 +881,59 @@ def _autodiagnosi() -> int:
     return 0
 
 
+def _clic_nel_dock() -> None:
+    """Il clic sull'icona nel Dock apre la barra.
+
+    Dettatura non ha finestre normali: senza questo, cliccare la sua icona nel
+    Dock non farebbe assolutamente niente e l'app sembrerebbe rotta. macOS
+    manda `applicationShouldHandleReopen:` al delegate dell'applicazione, che
+    però è di rumps: glielo si aggiunge a runtime, invece di sottoclassarlo.
+
+    L'app viva la si ritrova da `App._istanza`: il delegate lo costruisce rumps
+    e non ha un riferimento al nostro oggetto."""
+    import rumps.rumps as _r
+
+    def riapri(_delegate, _app, _finestre_visibili):
+        app = App._istanza
+        if app is not None:
+            app.alterna_pannello()
+        return True
+
+    try:
+        objc.classAddMethods(_r.NSApp, [
+            objc.selector(riapri,
+                          selector=b"applicationShouldHandleReopen:hasVisibleWindows:",
+                          signature=b"B@:@B")])
+    except Exception as e:
+        print(f"clic nel Dock non agganciato: {e}", file=sys.stderr)
+
+
+_LOCK = None
+
+
+def _istanza_unica() -> None:
+    """Una sola Dettatura per volta.
+
+    Senza, lanciando l'app quando gira già da sorgente (o viceversa) ci si
+    ritrova con DUE icone nella barra dei menu e DUE ascoltatori sulla stessa
+    scorciatoia: per macOS sono due app diverse, e nessuna delle due se ne
+    accorge. Il lock sta in BASE, che è la stessa cartella per il pacchetto e
+    per il sorgente: è l'unico posto dove si vedono a vicenda.
+
+    Il file resta aperto per sempre: È il lock. Chiuderlo lo rilascerebbe."""
+    global _LOCK
+    _LOCK = open(BASE / ".dettatura.lock", "w")
+    try:
+        fcntl.flock(_LOCK, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("Dettatura è già in esecuzione.", file=sys.stderr)
+        sys.exit(0)
+
+
 if __name__ == "__main__":
     if "--check" in sys.argv:
         sys.exit(_autodiagnosi())
     _primo_avvio()
+    _istanza_unica()
+    _clic_nel_dock()
     App().run()

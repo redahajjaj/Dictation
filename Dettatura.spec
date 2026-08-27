@@ -18,10 +18,17 @@ exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="Dettatura",
           target_arch=None, codesign_identity=None, entitlements_file=None)
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="Dettatura")
 app = BUNDLE(
-    coll, name="Dettatura.app", icon=None, bundle_identifier="com.reda.dettatura",
+    # l'icona la genera fai-icona.py; PyInstaller la copia in Resources e
+    # scrive lui CFBundleIconFile — non va messo a mano nell'info_plist qui
+    # sotto, o lo sovrascrive e l'icona sparisce
+    coll, name="Dettatura.app", icon="Dettatura.icns",
+    bundle_identifier="com.reda.dettatura",
     version="1.0",
     info_plist={
-        "LSUIElement": True,                      # solo barra dei menu, niente Dock
+        # 🔴 Niente LSUIElement: Reda vuole l'icona nel Dock, per ritrovare
+        # l'app e riaprirla dopo averla chiusa. Conseguenza: compare anche in
+        # ⌘Tab, e il clic sull'icona nel Dock deve fare qualcosa — ci pensa
+        # _clic_nel_dock() in dettatura.py, o sembrerebbe rotta.
         "NSMicrophoneUsageDescription": "Serve per registrare quello che detti e trascriverlo.",
         "NSAppleEventsUsageDescription": "Serve per copiare il testo negli appunti.",
         "CFBundleName": "Dettatura",
