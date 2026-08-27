@@ -34,6 +34,7 @@ import time
 import objc
 from AppKit import (
     NSAffineTransform,
+    NSAnimationContext,
     NSApp,
     NSAppearance,
     NSAppearanceNameVibrantLight,
@@ -74,6 +75,7 @@ from AppKit import (
     NSWindowCollectionBehaviorFullScreenAuxiliary,
     NSWindowDidMoveNotification,
     NSWindowStyleMaskNonactivatingPanel,
+    NSWorkspace,
 )
 from Foundation import (NSNotificationCenter, NSObject, NSPointInRect,
                         NSRunLoop, NSRunLoopCommonModes, NSZeroRect)
@@ -167,6 +169,25 @@ ALONE_DURATA = 0.55          # tutta la pulsazione, in secondi
 ALONE_SPESSORE = 1.5         # come il filo: oltre, è un contorno disegnato
 ALONE_ALFA = 0.60            # opacità di partenza, poi va a zero
 SILENZIO_ONDA = 0.02
+
+# Le transizioni. 0,30 s con una ease-out ripida: la barra parte veloce e si
+# posa. `CAMediaTimingFunction` non è importabile dal venv (PyObjC non ha i
+# metadati di QuartzCore): la classe si prende dal runtime, e l'unico
+# costruttore esposto è `alloc().initWithControlPoints____` — quattro trattini
+# bassi. `functionWithControlPoints_____` NON esiste, tira AttributeError.
+#
+# ANIMA si spegne dalle prove: durante il volo `frame()` torna il valore
+# INTERPOLATO, e ogni controllo che misura la barra subito dopo `aggiorna()`
+# leggerebbe una misura a metà strada.
+ANIMA = True
+DURATA_TRANSIZIONE = 0.30
+DURATA_COMPARSA = 0.16   # la dissolvenza del contenuto, dopo che la capsula è
+                         # arrivata: più corta del volo, o sembra un ritardo
+try:
+    CURVA = objc.lookUpClass("CAMediaTimingFunction").alloc().initWithControlPoints____(
+        0.2, 0.0, 0.0, 1.0)
+except Exception:      # niente QuartzCore: si usa la curva di sistema
+    CURVA = None
 
 FONT_TESTO = NSFont.systemFontOfSize_weight_(13.5, NSFontWeightRegular)
 FONT_MSG = NSFont.systemFontOfSize_weight_(12.5, NSFontWeightRegular)
@@ -488,6 +509,10 @@ class Pannello(NSObject):
         # (misurato: risponde 0,0 fino a ~1,5 s), e senza questo la barra
         # resterebbe al ripiego per tutta la giornata: le comparse sono ~1 al dì.
         self._a_casa = False
+        # Quante transizioni sono in volo. Contatore e non booleano: il battito
+        # a 10 Hz può farne partire una seconda mentre la prima vola, e il
+        # completion handler della prima aprirebbe il cancello troppo presto.
+        self._animazioni = 0
         return self
 
     # -- costruzione ----------------------------------------------------------
@@ -529,6 +554,12 @@ class Pannello(NSObject):
         self.contenuto = VistaVetro.alloc().initWithFrame_(
             NSMakeRect(0, 0, NOCC_REGISTRA_L, NOCC_A)
         ).prepara(raggio)
+        # La capsula ritaglia il suo contenuto: mentre cresce, testo e icone si
+        # scoprono invece di comparire fuori bordo. È la NOSTRA vista, non il
+        # vetro: `clipsToBounds` di NSGlassEffectView resta False e non si tocca.
+        # 🔴 Da qui in poi ALONE_CRESCITA è un tetto duro, non morbido: l'anello
+        # che sborda viene tagliato invece che disegnato fuori.
+        self.contenuto.setClipsToBounds_(True)
 
         # sinistra: mic quando puoi parlare, stop mentre registri, il segnale
         # quando qualcosa non va. È sempre la stessa casella: cambia solo cosa c'è dentro
@@ -746,8 +777,25 @@ class Pannello(NSObject):
 
     # -- il layout ------------------------------------------------------------
     @objc.python_method
-    def _applica(self, forma, L, A, h_testo, nota):
-        """L'unico posto dove si decide dove sta ogni cosa."""
+    def _applica(self, forma, L, A, h_testo, nota, anima=False):
+        """L'unico posto dove si decide dove sta ogni cosa.
+
+        Con `anima` a True ogni frame passa dall'animator e vola dentro UN SOLO
+        NSAnimationContext — lo stesso in cui vola la finestra. Contenuto e
+        capsula si muovono insieme: mai uno a destinazione e l'altro in viaggio.
+
+        🔴 Niente maschere di autoresizing: misurato, la mask sul vetro fa
+        atterrare la finestra a `vecchia - nuova` dopo un rimpicciolimento
+        grosso, e quella sui bottoni raddoppia l'aritmetica di questo metodo.
+        """
+        entranti = []
+
+        def telaio(v, r):
+            # Chi ENTRA non vola: si posa dove finirà e la capsula lo scopre
+            # crescendo (clipsToBounds). Farlo volare da dov'era prima gli
+            # farebbe attraversare la barra da parte a parte.
+            (v.animator() if anima and v not in entranti else v).setFrame_(r)
+
         nocciola = forma != DISTESA
         cy_icona = (NOCC_A - LATO_ICONA) / 2.0 if nocciola else A - 46
 
@@ -763,13 +811,39 @@ class Pannello(NSObject):
             (self.b_copia, not nocciola),
             (self.menu_btn, not nocciola),
         ):
-            v.setHidden_(not visibile)
+            if not visibile:
+                v.setHidden_(True)          # chi esce sparisce e basta
+            elif anima and v.isHidden():
+                entranti.append(v)          # svelato in dissolvenza più sotto
+            else:
+                v.setAlphaValue_(1.0)
+                v.setHidden_(False)
 
         # nocciola = niente bottone Copia: se l'anello stava correndo si ferma,
         # invece di girare a vuoto sopra il nulla. Fuori dal ciclo qui sopra:
         # là dentro verrebbe ri-mostrato a ogni cambio forma anche da spento.
+        # E prima del gruppo: un anello già spento non deve finire fra gli
+        # `entranti` e ricomparire in dissolvenza.
         if nocciola:
             self._ferma_alone()
+
+        if anima:
+            NSAnimationContext.beginGrouping()
+            ctx = NSAnimationContext.currentContext()
+            ctx.setDuration_(DURATA_TRANSIZIONE)   # il default è 0,25, non 0,30
+            if CURVA is not None:
+                ctx.setTimingFunction_(CURVA)
+            # 🔴 Chi entra resta invisibile per tutto il volo e compare DOPO, in
+            # dissolvenza (vedi `svela`). Farlo comparire subito significa
+            # vederlo fuori dalla capsula: prende il frame di destinazione a
+            # istante zero, mentre la capsula è ancora piccola — e il ritaglio
+            # non lo tiene, perché al primo fotogramma la maschera del layer
+            # segue ancora il modello, già arrivato. Guardato negli scatti: il
+            # testo finiva scritto sul desktop, sopra il bordo della barra.
+            # Prima si apre il contenitore, poi appare il contenuto.
+            for v in entranti:
+                v.setAlphaValue_(0.0)
+                v.setHidden_(False)
 
         icona, punti, tinta, attiva, aiuto = {
             RIPOSO: ("mic", 15, None, True, f"Detta ({self.tasti})"),
@@ -787,63 +861,112 @@ class Pannello(NSObject):
         self.b_azione.setContentTintColor_(tinta)
         self.b_azione.setToolTip_(aiuto or "")
         self._azione_attiva = attiva
-        self.b_azione.setFrame_(
-            NSMakeRect(X_ICONA if nocciola else 18, cy_icona, LATO_ICONA, LATO_ICONA)
-        )
+        telaio(self.b_azione,
+               NSMakeRect(X_ICONA if nocciola else 18, cy_icona, LATO_ICONA, LATO_ICONA))
 
         if forma == REGISTRA:
-            self.onda.setFrame_(NSMakeRect(X_ONDA, (NOCC_A - ONDA_A) / 2.0, ONDA_L, ONDA_A))
-            self.crono.setFrame_(NSMakeRect(X_CRONO, (NOCC_A - 19) / 2.0, L_CRONO, 19))
+            telaio(self.onda, NSMakeRect(X_ONDA, (NOCC_A - ONDA_A) / 2.0, ONDA_L, ONDA_A))
+            telaio(self.crono, NSMakeRect(X_CRONO, (NOCC_A - 19) / 2.0, L_CRONO, 19))
         elif nocciola:
             largo = L - X_MSG - CODA_MSG - (PASSO_ICONE if forma == ERRORE else 0)
-            self.messaggio.setFrame_(NSMakeRect(X_MSG, (NOCC_A - 20) / 2.0, largo, 20))
+            telaio(self.messaggio, NSMakeRect(X_MSG, (NOCC_A - 20) / 2.0, largo, 20))
             if forma == ERRORE:
-                self.b_chiudi.setFrame_(NSMakeRect(L - 36, (NOCC_A - 24) / 2.0, 24, 24))
+                telaio(self.b_chiudi, NSMakeRect(L - 36, (NOCC_A - 24) / 2.0, 24, 24))
         else:
             largo = L - FISSO
             blocco = h_testo + (H_NOTA if nota else 0)
             y = (A - blocco) / 2.0
             if nota:
-                self.nota.setFrame_(NSMakeRect(X_TESTO, y, largo, H_NOTA))
+                telaio(self.nota, NSMakeRect(X_TESTO, y, largo, H_NOTA))
                 y += H_NOTA
-            self.scroll.setFrame_(NSMakeRect(X_TESTO, y, largo, h_testo))
-            self.conteggio.setFrame_(NSMakeRect(L - 226, A - 41, 88, 19))
+            telaio(self.scroll, NSMakeRect(X_TESTO, y, largo, h_testo))
+            telaio(self.conteggio, NSMakeRect(L - 226, A - 41, 88, 19))
+            x_copia = 0.0
             for i, b in enumerate((self.b_svuota, self.b_copia, self.menu_btn)):
-                b.setFrame_(NSMakeRect(L - 114 + i * PASSO_ICONE, cy_icona,
-                                       LATO_ICONA, LATO_ICONA))
+                x = L - 114 + i * PASSO_ICONE
+                telaio(b, NSMakeRect(x, cy_icona, LATO_ICONA, LATO_ICONA))
+                if b is self.b_copia:
+                    x_copia = x
             # l'anello segue Copia: se la barra si allarga mentre pulsa, senza
-            # questo resterebbe indietro a mezz'aria
-            f = self.b_copia.frame()
+            # questo resterebbe indietro a mezz'aria. La posizione la ricava
+            # dalla stessa formula del bottone, non leggendone il frame: in volo
+            # quel frame è un valore in viaggio, non la destinazione.
             lato_alone = LATO_ICONA + 2 * ALONE_CRESCITA
-            self.alone.setFrame_(NSMakeRect(f.origin.x - ALONE_CRESCITA,
-                                            f.origin.y - ALONE_CRESCITA,
-                                            lato_alone, lato_alone))
+            telaio(self.alone, NSMakeRect(x_copia - ALONE_CRESCITA,
+                                          cy_icona - ALONE_CRESCITA,
+                                          lato_alone, lato_alone))
 
-        self.contenuto.setFrame_(NSMakeRect(0, 0, L, A))
-        self.radice.setFrame_(NSMakeRect(0, 0, L, A))
-        self.vetro.setFrame_(NSMakeRect(0, 0, L, A))
         raggio = min(A / 2.0, RAGGIO_MAX)
-        if NSGlassEffectView is not None:
-            self.vetro.setCornerRadius_(raggio)
-        else:
-            self.vetro.layer().setCornerRadius_(raggio)
-        # il raggio cambia con la forma (nocciola 22, distesa 32): tinta e filo
-        # non lo ereditano da nessuno, glielo si deve ridire a ogni cambio
-        self.contenuto.imposta_raggio(raggio)
-        self.filo.setFrame_(NSMakeRect(0, 0, L, A))
-        self.filo.imposta_raggio(raggio)
+        cresce = A > self.finestra.frame().size.height
 
-        self._ridimensiona(L, A)
+        def raggia():
+            if NSGlassEffectView is not None:
+                self.vetro.setCornerRadius_(raggio)
+            else:
+                self.vetro.layer().setCornerRadius_(raggio)
+            # il raggio cambia con la forma (nocciola 22, distesa 32): tinta e
+            # filo non lo ereditano da nessuno, glielo si deve ridire
+            self.contenuto.imposta_raggio(raggio)
+            self.filo.imposta_raggio(raggio)
+
+        pieno = NSMakeRect(0, 0, L, A)
+        telaio(self.contenuto, pieno)
+        telaio(self.radice, pieno)
+        telaio(self.vetro, pieno)
+        telaio(self.filo, pieno)
+
+        if not anima:
+            raggia()
+            for v in entranti:
+                v.setAlphaValue_(1.0)
+            self._ridimensiona(L, A)
+            return
+
+        def svela():
+            """Il contenuto compare quando la capsula è arrivata."""
+            if not entranti:
+                return
+            NSAnimationContext.beginGrouping()
+            NSAnimationContext.currentContext().setDuration_(DURATA_COMPARSA)
+            for v in entranti:
+                if not v.isHidden():
+                    v.animator().setAlphaValue_(1.0)
+            NSAnimationContext.endGrouping()
+
+        def poi():
+            # Il raggio non si anima mai, ma il QUANDO conta: crescendo, un
+            # raggio 32 messo subito starebbe su una barra ancora alta 44 — più
+            # della metà dell'altezza — per tutti i 0,3 s.
+            if cresce:
+                raggia()
+            svela()
+
+        # rimpicciolendo il raggio va subito, o resterebbe grande su una barra
+        # già bassa per tutta la durata del volo
+        if not cresce:
+            raggia()
+        try:
+            self._ridimensiona(L, A, True, poi)
+        finally:
+            NSAnimationContext.endGrouping()
 
     @objc.python_method
-    def _ridimensiona(self, L, A):
+    def _ridimensiona(self, L, A, anima=False, poi=None):
         """La barra cresce dal centro e verso il basso: il bordo superiore non si
         muove e il centro nemmeno — come la Dynamic Island che si espande.
 
         Niente clamp verticale: parcheggiata in basso, la barra si alzerebbe da
         sola mentre parli (misurato: 246 punti di salto). Il clamp orizzontale
         invece serve sul serio — con l'icona vicino al bordo destro, una distesa
-        da 720 centrata sotto di lei uscirebbe fuori di centinaia di punti."""
+        da 720 centrata sotto di lei uscirebbe fuori di centinaia di punti.
+
+        Il conto qui sotto è già animation-safe: campionando ogni fotogramma di
+        una transizione, `origin.y + height` resta lo stesso numero.
+
+        Con `anima` la finestra vola dentro il gruppo già aperto da `_applica`, e
+        `poi` è quello che va fatto a volo finito. `invalidateShadow` sta lì
+        dentro: chiamata subito, ricalcolerebbe l'ombra sulla sagoma VECCHIA e la
+        barra volerebbe per tutti i 0,3 s con l'ombra della forma di partenza."""
         ora = self.finestra.frame()
         cornice = self.finestra.frameRectForContentRect_(NSMakeRect(0, 0, L, A))
         cx = ora.origin.x + ora.size.width / 2.0
@@ -856,8 +979,28 @@ class Pannello(NSObject):
         nuovo = NSMakeRect(x, alto - cornice.size.height,
                            cornice.size.width, cornice.size.height)
         self._atteso = (round(nuovo.origin.x), round(nuovo.origin.y))
-        self.finestra.setFrame_display_(nuovo, True)
-        self.finestra.invalidateShadow()
+        if not anima:
+            self.finestra.setFrame_display_(nuovo, True)
+            # AppKit può costringerci contro il bordo alto dello schermo:
+            # `_atteso` deve dire quello che ci è stato DATO, non quello che
+            # abbiamo chiesto, o il prossimo giro lo scambia per un trascinamento
+            o = self.finestra.frame().origin
+            self._atteso = (round(o.x), round(o.y))
+            self.finestra.invalidateShadow()
+            return
+
+        self._animazioni += 1
+
+        def fine():
+            self._animazioni = max(0, self._animazioni - 1)
+            o = self.finestra.frame().origin
+            self._atteso = (round(o.x), round(o.y))
+            if poi is not None:
+                poi()
+            self.finestra.invalidateShadow()
+
+        NSAnimationContext.currentContext().setCompletionHandler_(fine)
+        self.finestra.animator().setFrame_display_(nuovo, True)
 
     @objc.python_method
     def _ridisegna(self):
@@ -869,8 +1012,16 @@ class Pannello(NSObject):
         L, A, h_testo, nota = self._misure(forma)
         firma = (forma, L, A, h_testo, nota)
         if firma != self._firma:
+            # `_firma is not None` salta il primissimo layout (finestra ancora al
+            # frame di nascita); `isVisible()` salta i cambi a barra chiusa — e
+            # lì serve davvero: `setFrameOrigin_` chiamata durante un volo viene
+            # zittita, e in `apri()` il testo arriva PRIMA di `_posa`, quindi la
+            # barra non uscirebbe più da sotto l'icona.
+            anima = (ANIMA and self._firma is not None and self.finestra.isVisible()
+                     and not NSWorkspace.sharedWorkspace()
+                     .accessibilityDisplayShouldReduceMotion())
             self._firma = firma
-            self._applica(forma, L, A, h_testo, nota)
+            self._applica(forma, L, A, h_testo, nota, anima)
 
         if forma == REGISTRA:
             self.onda.spingi(self._livello)
@@ -1058,7 +1209,17 @@ class Pannello(NSObject):
         quando il ridimensionamento diventerà animato (il frame continua a
         cambiare per 0,3 s dopo la chiamata), e ogni fotogramma passerebbe per
         una trascinata.
+
+        Il cancello `_animazioni` viene prima di tutto. Misurato: oggi un
+        ridimensionamento animato posta solo notifiche di resize e nessuna di
+        spostamento, quindi da `_ridimensiona` non arriva niente. È una cintura
+        per il giorno che si animerà l'entrata da sotto l'icona: un'animazione di
+        sola origine posta origini intermedie che cadono tutte fuori dalla soglia
+        di un punto, `_spostata` andrebbe a True al primo fotogramma, e niente in
+        questo file lo rimette mai a False.
         """
+        if self._animazioni > 0:
+            return
         o = self.finestra.frame().origin
         if (self._atteso is not None
                 and abs(o.x - self._atteso[0]) <= 1

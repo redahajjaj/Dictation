@@ -23,6 +23,12 @@ from Foundation import NSDate, NSRunLoop
 
 import pannello as P
 
+# 🔴 Le misure si leggono subito dopo `aggiorna()`: con le transizioni accese
+# `frame()` torna il valore INTERPOLATO, cioè la barra a metà strada. Spente,
+# ogni controllo misura la destinazione. Le transizioni hanno controlli propri,
+# in fondo al file, che le riaccendono per il tempo che serve.
+P.ANIMA = False
+
 SCATTI = Path(__file__).resolve().parent / ".scratch" / "barra-liquid-glass" / "prototipo" / "barra-vera"
 FOTO = "/System/Library/Desktop Pictures/Sonoma.heic"
 
@@ -431,6 +437,83 @@ def main():
     controlla("riaperta: resta dove l'hai messa",
               round(p.finestra.frame().origin.x) == 120,
               str(round(p.finestra.frame().origin.x)))
+
+    # --- le transizioni, con l'animazione ACCESA ------------------------------
+    # Tutto il resto del file misura a destinazione (P.ANIMA = False in cima).
+    # Qui si riaccende apposta: sono gli unici controlli che guardano il volo.
+    print("\n— le transizioni —")
+    P.ANIMA = True
+    # i controlli qui sopra hanno trascinato la barra apposta: si riparte da
+    # «mai spostata», o il controllo 4 leggerebbe quel trascinamento finto
+    p._spostata = False
+    try:
+        p.imposta_testo("")
+        p.aggiorna(P.PRONTO, "premi ⌘S per dettare")
+        attendi(0.5)
+        largo_prima = p.finestra.frame().size.width
+
+        # 1. durante il volo la barra è a metà strada, non già arrivata
+        p.imposta_testo(LUNGO)
+        p.aggiorna(P.PRONTO, "34 parole")
+        attendi(0.12)
+        in_volo = p.finestra.frame().size.width
+        controlla("in volo la barra è a metà strada",
+                  largo_prima < in_volo < P.DIST_MAX,
+                  f"{round(largo_prima)} → {round(in_volo)} → …")
+        controlla("in volo il cancello è chiuso", p._animazioni > 0,
+                  f"{p._animazioni} in volo")
+
+        # 🔴 2. in volo il contenuto che ENTRA deve essere invisibile. Se compare
+        #    subito prende il frame di destinazione a istante zero, mentre la
+        #    capsula è ancora piccola: lo si vede scritto fuori dalla barra, sul
+        #    desktop. Visto negli scatti, non dedotto.
+        controlla("in volo il testo che entra non si vede",
+                  p.scroll.alphaValue() < 0.01,
+                  f"alpha {round(p.scroll.alphaValue(), 2)}")
+
+        # 3. e arriva a destinazione
+        attendi(0.6)
+        controlla("arrivata, il testo si vede", p.scroll.alphaValue() > 0.99,
+                  f"alpha {round(p.scroll.alphaValue(), 2)}")
+        arrivata = p.finestra.frame().size.width
+        controlla("arriva a destinazione", arrivata > in_volo + 10,
+                  f"→ {round(arrivata)}")
+        controlla("a volo finito il cancello si riapre", p._animazioni == 0)
+
+        # 3. 🔴 il bordo alto non si muove NEMMENO durante il volo: è la cosa
+        #    che fa sembrare la barra ancorata sotto l'icona invece che elastica
+        p.imposta_testo("")
+        p.aggiorna(P.PRONTO, "premi ⌘S per dettare")
+        attendi(0.5)
+        f = p.finestra.frame()
+        alto_prima = round(f.origin.y + f.size.height)
+        p.imposta_testo(LUNGO)
+        p.aggiorna(P.PRONTO, "34 parole")
+        alti = []
+        for _ in range(8):
+            attendi(0.04)
+            g = p.finestra.frame()
+            alti.append(round(g.origin.y + g.size.height))
+        attendi(0.5)
+        controlla("in volo il bordo alto resta fermo",
+                  all(abs(a - alto_prima) <= 1 for a in alti),
+                  f"{alto_prima} · fotogrammi {sorted(set(alti))}")
+
+        # 4. una transizione non deve far credere alla barra di essere trascinata
+        controlla("il volo non conta come trascinamento", not p._spostata)
+
+        # 5. spegnendo l'animazione si torna al salto secco, senza volo
+        P.ANIMA = False
+        p.imposta_testo("")
+        p.aggiorna(P.PRONTO, "premi ⌘S per dettare")
+        attendi(0.4)
+        p.imposta_testo(LUNGO)
+        p.aggiorna(P.PRONTO, "34 parole")
+        controlla("spenta, arriva subito", p._animazioni == 0
+                  and p.finestra.frame().size.width > 400,
+                  f"{round(p.finestra.frame().size.width)} senza attendere")
+    finally:
+        P.ANIMA = False
 
     if fondo is not None:
         fondo.orderOut_(None)
