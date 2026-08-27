@@ -48,10 +48,12 @@ from pannello import (
     ERR_GENERICO,
     ERR_NIENTE,
     ERR_VOCE,
+    GRADI_MATITA,
+    PESO_BARRA,
     PRONTO,
     REGISTRA,
     Pannello,
-    _simbolo,
+    _simbolo_inclinato,
 )
 
 
@@ -349,9 +351,19 @@ def scrivi_storico(grezzo: str, pulito: str, modo: str, secondi: float) -> None:
 
 # Nella barra dei menu ci va un simbolo di sistema, non un'emoji: l'emoji la
 # disegna macOS a colori e stona fra le altre icone, che sono tutte monocrome e
-# seguono chiaro/scuro. Questi sono nomi SF Symbol, resi template da _simbolo().
-ICONA_DEFAULT = "mic"
-ICONE = {PRONTO: "mic", ELABORA: "ellipsis.circle", REGISTRA: "mic.fill"}
+# seguono chiaro/scuro.
+#
+# La matita è l'identità dell'app: scrivo io al posto tuo. Sta inclinata a 60°
+# (SF Symbols la disegna a 45, GRADI_MATITA ne aggiunge 15). Gli altri due stati
+# sono gli stessi glifi che la barra si mette a sinistra mentre lavora — l'onda
+# mentre ascolta, il cerchio punteggiato mentre trascrive: sopra e sotto dicono
+# la stessa cosa. Coppia (nome SF Symbol, gradi di inclinazione).
+ICONE = {
+    PRONTO: ("pencil", GRADI_MATITA),
+    REGISTRA: ("waveform", 0),
+    ELABORA: ("circle.dotted", 0),
+}
+ICONA_DEFAULT = ICONE[PRONTO]
 NOMI_MODO = {"pulito": "testo pulito", "prompt": "istruzione", "grezzo": "grezzo"}
 
 # La scorciatoia si cambia dal .env, e l'app deve dire quella VERA: scriverla a
@@ -475,15 +487,19 @@ class App(rumps.App):
         self._stato, self._etichetta = PRONTO, etichetta
         self._errore_n += 1
 
-    def _mostra_icona(self, nome: str):
+    def _mostra_icona(self, icona):
         """Mette il simbolo nella barra dei menu, solo se è cambiato."""
-        if nome == self._icona_ora or self._bottone_barra is None:
+        if icona == self._icona_ora or self._bottone_barra is None:
             return
-        im = _simbolo(nome, 16)      # 16 = la taglia delle icone di sistema accanto
+        nome, gradi = icona
+        # 17pt e peso Medium: la matita sta in diagonale, e a peso Regular fra le
+        # icone di sistema che le stanno accanto si legge come un trattino.
+        # _simbolo_inclinato la rimpicciolisce da sé se non ci sta nella casella.
+        im = _simbolo_inclinato(nome, 17, gradi, peso=PESO_BARRA)
         if im is None:          # SF Symbol assente su questa versione di macOS
             return
         self._bottone_barra.setImage_(im)
-        self._icona_ora = nome
+        self._icona_ora = icona
 
     # -- ingressi -------------------------------------------------------------
     def _da_scorciatoia(self):

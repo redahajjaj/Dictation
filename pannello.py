@@ -32,6 +32,7 @@ import re
 
 import objc
 from AppKit import (
+    NSAffineTransform,
     NSApp,
     NSAppearance,
     NSAppearanceNameVibrantLight,
@@ -40,6 +41,7 @@ from AppKit import (
     NSBezierPath,
     NSButton,
     NSColor,
+    NSCompositingOperationSourceOver,
     NSFloatingWindowLevel,
     NSFont,
     NSFontAttributeName,
@@ -72,7 +74,8 @@ from AppKit import (
     NSWindowDidMoveNotification,
     NSWindowStyleMaskNonactivatingPanel,
 )
-from Foundation import NSNotificationCenter, NSObject, NSPointInRect
+from Foundation import (NSNotificationCenter, NSObject, NSPointInRect,
+                        NSZeroRect)
 
 # --- gli stati che l'app ci manda -------------------------------------------
 PRONTO, REGISTRA, ELABORA = "pronto", "registra", "elabora"
@@ -171,17 +174,75 @@ def _maiuscola(s: str) -> str:
     return (s[:1].upper() + s[1:]) if s else s
 
 
-def _simbolo(nome: str, punti: float):
+def _simbolo(nome: str, punti: float, peso=NSFontWeightRegular):
     """Un'icona di sistema, pronta per essere tinta da chi la ospita."""
     im = NSImage.imageWithSystemSymbolName_accessibilityDescription_(nome, None)
     if im is None:
         return None
     cfg = NSImageSymbolConfiguration.configurationWithPointSize_weight_scale_(
-        punti, NSFontWeightRegular, NSImageSymbolScaleMedium
+        punti, peso, NSImageSymbolScaleMedium
     )
     im = im.imageWithSymbolConfiguration_(cfg)
     im.setTemplate_(True)      # template = si lascia colorare, e segue chiaro/scuro
     return im
+
+
+# La matita di SF Symbols è disegnata a 45° esatti — misurato sul corpo del
+# glifo, escludendo punta e gomma che sbilanciano il baricentro: 45,07°.
+# Inclinata deve stare a circa 60, quindi 45 + 15.
+GRADI_MATITA = 15
+# Le icone di sistema accanto sono dritte e piene; una matita obliqua a peso
+# normale, fra loro, si legge come un trattino.
+PESO_BARRA = NSFontWeightMedium
+# Tutti gli stati della barra dei menu nella stessa casella: ruotare fa crescere
+# l'ingombro, e senza una casella comune l'icona salterebbe di larghezza a ogni
+# cambio di stato. 22 = l'altezza della barra dei menu: una matita in diagonale
+# occupa la casella lungo l'obliquo, quindi a parità di casella si legge più
+# piccola dei simboli dritti che le stanno accanto.
+CASELLA_BARRA = 22.0
+
+
+def _simbolo_inclinato(nome: str, punti: float, gradi: float,
+                       casella: float = CASELLA_BARRA, peso=NSFontWeightRegular):
+    """Lo stesso simbolo di _simbolo, ruotato e centrato in una casella fissa.
+
+    Resta template: la tinta continua a metterla macOS, e il chiaro/scuro pure.
+    🔴 Ruotano solo i simboli fatti di sola matita (`pencil`, `applepencil`):
+    nei compositi — `pencil.line`, `pencil.and.outline` — ruoterebbe anche la
+    riga o il cerchio, e il disegno diventa una «L» o una «ø» sbarrata.
+    """
+    im = _simbolo(nome, punti, peso)
+    if im is None:
+        return None
+    misura = im.size()
+
+    # Ruotando, il riquadro che serve cresce. Se non ci sta nella casella, il
+    # disegno si rimpicciolisce invece di farsi tagliare a un bordo in silenzio.
+    rad = math.radians(gradi)
+    cos, sin = abs(math.cos(rad)), abs(math.sin(rad))
+    ingombro_l = misura.width * cos + misura.height * sin
+    ingombro_a = misura.width * sin + misura.height * cos
+    k = min(1.0, casella / ingombro_l, casella / ingombro_a) if ingombro_l else 1.0
+    largo, alto = misura.width * k, misura.height * k
+
+    def disegna(_rect):
+        t = NSAffineTransform.transform()
+        t.translateXBy_yBy_(casella / 2.0, casella / 2.0)
+        if gradi:
+            t.rotateByDegrees_(gradi)
+        t.translateXBy_yBy_(-largo / 2.0, -alto / 2.0)
+        t.concat()
+        im.drawInRect_fromRect_operation_fraction_(
+            NSMakeRect(0, 0, largo, alto), NSZeroRect,
+            NSCompositingOperationSourceOver, 1.0,
+        )
+        return True
+
+    fuori = NSImage.imageWithSize_flipped_drawingHandler_(
+        NSMakeSize(casella, casella), False, disegna
+    )
+    fuori.setTemplate_(True)
+    return fuori
 
 
 def _larghezza(testo: str, font) -> float:
