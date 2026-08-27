@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import math
 import re
+import time
 
 import objc
 from AppKit import (
@@ -75,7 +76,7 @@ from AppKit import (
     NSWindowStyleMaskNonactivatingPanel,
 )
 from Foundation import (NSNotificationCenter, NSObject, NSPointInRect,
-                        NSZeroRect)
+                        NSRunLoop, NSRunLoopCommonModes, NSZeroRect)
 
 # --- gli stati che l'app ci manda -------------------------------------------
 PRONTO, REGISTRA, ELABORA = "pronto", "registra", "elabora"
@@ -151,6 +152,20 @@ TINTA_VETRO = (0.96, 0.20)
 # Il filo di luce sul bordo: è la leva che fa leggere «vetro» invece di
 # «rettangolo grigio». Oltre 1,5pt diventa un contorno disegnato, non vetro.
 FILO_L, FILO_ALFA = 1.0, 0.65
+
+# L'anello che pulsa attorno a Copia quando il testo va negli appunti. È il
+# secondo pezzo della stessa risposta: la spunta verde dice COSA è successo,
+# l'anello dice QUANDO — e l'occhio prende il movimento prima del colore.
+# Cresce e svanisce: non lampeggia e non resta acceso, o farebbe concorrenza
+# alla spunta invece di accompagnarla.
+#
+# 🔴 Gli 8 punti di crescita sono un tetto fisico, non un gusto: il bottone sta
+# a 18 punti dal bordo alto della capsula, quindi l'anello arriva a 10 dal filo.
+# Più larghi, e uscirebbe dal vetro.
+ALONE_CRESCITA = 8.0         # quanto l'anello esce dalla casella del bottone
+ALONE_DURATA = 0.55          # tutta la pulsazione, in secondi
+ALONE_SPESSORE = 1.5         # come il filo: oltre, è un contorno disegnato
+ALONE_ALFA = 0.60            # opacità di partenza, poi va a zero
 SILENZIO_ONDA = 0.02
 
 FONT_TESTO = NSFont.systemFontOfSize_weight_(13.5, NSFontWeightRegular)
@@ -339,6 +354,69 @@ class Filo(NSView):
         p.stroke()
 
 
+class Alone(NSView):
+    """L'anello che pulsa attorno a Copia: la conferma «l'ha preso davvero»
+    detta con un movimento invece che con una scritta.
+
+    Sta SOPRA il bottone, quindi — come il Filo — `hitTest_` deve tornare None:
+    senza, si mangerebbe il clic su Copia e il bottone smetterebbe di rispondere.
+
+    Il tempo lo legge dall'orologio, non contando i fotogrammi. Se il run loop
+    ne perde qualcuno l'anello arriva in fondo lo stesso; con un contatore, un
+    run loop lento lo lascerebbe acceso per sempre."""
+
+    @objc.python_method
+    def prepara(self):
+        self._t0 = None          # quando è partita la corsa; None = spento
+        self._q = 0.0            # a che punto è, da 0 a 1
+        self.setHidden_(True)
+        return self
+
+    def hitTest_(self, _p):
+        return None              # 🔴 come il Filo. NON TOGLIERE: uccide Copia.
+
+    @objc.python_method
+    def parti(self):
+        self._t0 = time.monotonic()
+        self._q = 0.0
+        self.setHidden_(False)
+        self.setNeedsDisplay_(True)
+
+    @objc.python_method
+    def avanza(self) -> bool:
+        """Un fotogramma. Torna False quando la corsa è finita."""
+        if self._t0 is None:
+            return False
+        self._q = (time.monotonic() - self._t0) / ALONE_DURATA
+        if self._q >= 1.0:
+            self.spegni()
+            return False
+        self.setNeedsDisplay_(True)
+        return True
+
+    @objc.python_method
+    def spegni(self):
+        self._t0 = None
+        self.setHidden_(True)
+
+    def drawRect_(self, _r):
+        if self._t0 is None:
+            return
+        q = max(0.0, min(1.0, self._q))
+        b = self.bounds()
+        cx, cy = b.size.width / 2.0, b.size.height / 2.0
+        # il raggio parte dal bordo del bottone e frena arrivando, l'opacità
+        # cala più in fretta: così l'anello si dissolve mentre si allarga,
+        # invece di spegnersi di colpo a corsa finita
+        r = (LATO_ICONA / 2.0 - 1.0) + ALONE_CRESCITA * (1.0 - (1.0 - q) ** 3)
+        p = NSBezierPath.bezierPathWithOvalInRect_(
+            NSMakeRect(cx - r, cy - r, 2 * r, 2 * r))
+        p.setLineWidth_(ALONE_SPESSORE)
+        NSColor.systemGreenColor().colorWithAlphaComponent_(
+            ALONE_ALFA * (1.0 - q) ** 1.5).setStroke()
+        p.stroke()
+
+
 class Onda(NSView):
     """Le barrette del volume: le ultime 25 misure, la più recente a destra.
 
@@ -393,6 +471,9 @@ class Pannello(NSObject):
         self._etichetta = ""
         self._livello = 0.0
         self._copiato = False           # la spunta verde, per 1,2 s
+        self._t_spunta = None           # il timer della spunta: tenuto, per non
+                                        # farlo spegnere dalla copia precedente
+        self._t_alone = None            # il timer dell'anello, uno solo alla volta
         self._firma = None              # la forma già a video: se non cambia, non si tocca
         self._azione_attiva = False     # se l'icona di sinistra fa qualcosa
         # Chi comanda la posizione: finché è False la barra torna sotto l'icona a
@@ -509,6 +590,15 @@ class Pannello(NSObject):
         self.menu_btn = self._icona("ellipsis", 15, "apriMenu:", "Modalità e impostazioni")
         for b in (self.b_svuota, self.b_copia, self.menu_btn):
             self.contenuto.addSubview_(b)
+
+        # Sopra i bottoni ma sotto il filo. L'ordine è tutto: sotto i bottoni
+        # l'anello sparirebbe dietro l'icona, sopra il filo coprirebbe il bordo
+        # della capsula. Basta scriverlo qui, prima del filo.
+        lato_alone = LATO_ICONA + 2 * ALONE_CRESCITA
+        self.alone = Alone.alloc().initWithFrame_(
+            NSMakeRect(0, 0, lato_alone, lato_alone)
+        ).prepara()
+        self.contenuto.addSubview_(self.alone)
 
         # per ULTIMO: sotto qualsiasi altra vista il filo sparirebbe
         self.filo = Filo.alloc().initWithFrame_(
@@ -675,6 +765,12 @@ class Pannello(NSObject):
         ):
             v.setHidden_(not visibile)
 
+        # nocciola = niente bottone Copia: se l'anello stava correndo si ferma,
+        # invece di girare a vuoto sopra il nulla. Fuori dal ciclo qui sopra:
+        # là dentro verrebbe ri-mostrato a ogni cambio forma anche da spento.
+        if nocciola:
+            self._ferma_alone()
+
         icona, punti, tinta, attiva, aiuto = {
             RIPOSO: ("mic", 15, None, True, f"Detta ({self.tasti})"),
             REGISTRA: ("stop.fill", 13, NSColor.systemRedColor(), True,
@@ -715,6 +811,13 @@ class Pannello(NSObject):
             for i, b in enumerate((self.b_svuota, self.b_copia, self.menu_btn)):
                 b.setFrame_(NSMakeRect(L - 114 + i * PASSO_ICONE, cy_icona,
                                        LATO_ICONA, LATO_ICONA))
+            # l'anello segue Copia: se la barra si allarga mentre pulsa, senza
+            # questo resterebbe indietro a mezz'aria
+            f = self.b_copia.frame()
+            lato_alone = LATO_ICONA + 2 * ALONE_CRESCITA
+            self.alone.setFrame_(NSMakeRect(f.origin.x - ALONE_CRESCITA,
+                                            f.origin.y - ALONE_CRESCITA,
+                                            lato_alone, lato_alone))
 
         self.contenuto.setFrame_(NSMakeRect(0, 0, L, A))
         self.radice.setFrame_(NSMakeRect(0, 0, L, A))
@@ -986,20 +1089,65 @@ class Pannello(NSObject):
     # -- azioni (selettori Objective-C) ---------------------------------------
     @objc.python_method
     def segnala_copia(self):
-        """L'icona diventa una spunta verde per 1,2 s: è la risposta alla domanda
-        «l'ha preso davvero?», data senza far sparire la barra."""
+        """L'icona diventa una spunta verde per 1,2 s e un anello le pulsa
+        attorno per mezzo secondo: è la risposta alla domanda «l'ha preso
+        davvero?», data senza far sparire la barra. La spunta dice cosa è
+        successo, l'anello dice quando — e l'occhio prende il movimento prima
+        del colore.
+
+        🔴 Il timer della spunta ora si tiene da parte. Prima no, e due copie a
+        meno di 1,2 s l'una dall'altra facevano spegnere dal timer della prima
+        la spunta della seconda dopo un attimo."""
         self._copiato = True
         self.b_copia.setImage_(_simbolo("checkmark.circle.fill", 15))
         self.b_copia.setContentTintColor_(NSColor.systemGreenColor())
+        # prima il layout, poi l'anello: così parte già al posto giusto
         self._ridisegna()
-        NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
+        self._pulsa_alone()
+        if self._t_spunta is not None:
+            self._t_spunta.invalidate()
+        self._t_spunta = NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
             1.2, False, lambda _t: self._ripristina_copia()
         )
+
+    @objc.python_method
+    def _pulsa_alone(self):
+        """Accende l'anello. Vive per conto suo: `_ridisegna` a 10 Hz non lo
+        tocca, perché rifà il layout solo se la firma cambia — e copiare non la
+        cambia. Se cambia lo stesso, `_applica` lo sposta senza fermarlo.
+
+        Il timer sta in common modes: in default mode si congelerebbe appena
+        macOS entra in un tracking loop, e l'anello resterebbe acceso a metà."""
+        if self.finestra is None or self.b_copia.isHidden():
+            return
+        self._ferma_alone()          # due copie di fila = un anello solo
+        self.alone.parti()
+        t = NSTimer.timerWithTimeInterval_repeats_block_(
+            1.0 / 60.0, True, lambda _t: self._battito_alone()
+        )
+        NSRunLoop.currentRunLoop().addTimer_forMode_(t, NSRunLoopCommonModes)
+        self._t_alone = t
+
+    @objc.python_method
+    def _battito_alone(self):
+        if self.finestra is None or not self.alone.avanza():
+            self._ferma_alone()
+
+    @objc.python_method
+    def _ferma_alone(self):
+        if self._t_alone is not None:
+            self._t_alone.invalidate()
+            self._t_alone = None
+        # getattr: _applica può girare durante _costruisci, prima che l'anello
+        # esista — senza, sarebbe un AttributeError muto dentro il layout
+        if getattr(self, "alone", None) is not None:
+            self.alone.spegni()
 
     @objc.python_method
     def _ripristina_copia(self):
         if self.finestra is None:
             return
+        self._t_spunta = None
         self._copiato = False
         self.b_copia.setImage_(_simbolo("doc.on.doc", 15))
         self.b_copia.setContentTintColor_(None)

@@ -276,6 +276,11 @@ def main():
               and p.filo.hitTest_(P.NSMakePoint(10, 10)) is None,
               "ultimo subview, hitTest → None")
 
+    # l'anello di «copiato» sta sopra i bottoni ma sotto il filo
+    controlla("l'anello sta sotto il filo",
+              p.contenuto.subviews()[-2] is p.alone,
+              "penultimo subview")
+
     # il cursore di scorrimento non deve rubare larghezza al testo: se lo fa, la
     # frase va a capo, e andando a capo il cursore serve davvero — per sempre
     p.imposta_testo(MEDIO)
@@ -315,6 +320,48 @@ def main():
               f"scorribile {round(vuoto)} punti (campo {round(alta_testo)}, "
               f"finestrella {round(alta_finestrella)})")
     p51.chiudi()
+
+    # --- l'anello di «copiato» ------------------------------------------------
+    # Serve la barra distesa: a nocciola il bottone Copia non c'è, e l'anello
+    # giustamente non parte.
+    p.imposta_testo(MEDIO)
+    p.aggiorna(P.PRONTO, "7 parole")
+    attendi(0.2)
+    f_copia = p.b_copia.frame()
+    # come il filo, l'anello sta SOPRA il bottone: se gli rubasse il clic, Copia
+    # smetterebbe di funzionare senza un errore che lo dica
+    controlla("l'anello non si mangia il clic su Copia",
+              p.alone.hitTest_(P.NSMakePoint(5, 5)) is None
+              and p.contenuto.hitTest_(
+                  P.NSMakePoint(f_copia.origin.x + 14,
+                                f_copia.origin.y + 14)) is p.b_copia)
+
+    # copiare due volte di fila: la spunta della seconda non deve essere spenta
+    # dal timer della prima (era il caso — spariva dopo un attimo invece di 1,2 s)
+    p.segnala_copia()
+    primo = p._t_spunta
+    attendi(0.2)
+    p.segnala_copia()
+    controlla("due copie di fila: il timer vecchio è stato spento",
+              p._t_spunta is not primo and not primo.isValid())
+    attendi(0.3)
+    controlla("due copie di fila: la spunta della seconda è ancora lì", p._copiato)
+    controlla("due copie di fila: un anello solo, ripartito da zero",
+              p._t_alone is not None and p.alone._q < 1.0,
+              f"q={round(p.alone._q, 2)}")
+    attendi(0.5)
+    controlla("l'anello si spegne da solo",
+              p._t_alone is None and p.alone.isHidden())
+    # e l'anello segue Copia quando la barra cambia larghezza
+    p.imposta_testo(LUNGO)
+    p.aggiorna(P.PRONTO, "34 parole")
+    attendi(0.2)
+    fc, fa = p.b_copia.frame(), p.alone.frame()
+    controlla("l'anello resta centrato su Copia",
+              abs((fa.origin.x + fa.size.width / 2)
+                  - (fc.origin.x + fc.size.width / 2)) <= 0.5,
+              f"copia {round(fc.origin.x)} · anello {round(fa.origin.x)}")
+    p._ripristina_copia()
 
     # il layout non si rifà se non è cambiato niente
     p.imposta_testo(MEDIO)
