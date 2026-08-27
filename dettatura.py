@@ -43,6 +43,7 @@ from pynput import keyboard
 from pannello import (
     ATTESA,
     ELABORA,
+    ERRORI,
     ERR_CORTO,
     ERR_GENERICO,
     ERR_NIENTE,
@@ -164,6 +165,7 @@ def durata_voce(pezzi) -> float:
             frame += len(p)
     return frame / FREQUENZA
 DURATA_MAX = 15 * 60  # taglio di sicurezza se ti dimentichi il microfono aperto
+DURATA_ERRORE = 2.0   # l'errore è un avviso, non uno stato: poi si ritira da solo
 
 
 # ---------------------------------------------------------------- impostazioni
@@ -403,6 +405,10 @@ class App(rumps.App):
         self._pannello: Pannello | None = None
         self._fine_attesa = 0.0
         self._etichetta_prima = self.invito
+        self._fine_errore = 0.0       # quando l'errore a video scade (0.0 = nessuno)
+        self._errore_n = 0            # quanti errori sono stati prodotti da sempre
+        self._errore_armato = -1      # per quale di quelli è armato il timer
+        self._barra_per_errore = False  # l'ha aperta l'errore? allora se la riprende
         self._clic = None
         self._icona_agganciata = False
         self._bottone_barra = None
@@ -460,6 +466,14 @@ class App(rumps.App):
         except Exception as e:
             print(f"icona non agganciata: {e}", file=sys.stderr)
             self._icona_agganciata = True   # inutile riprovare a ogni giro
+
+    def _segnala_errore(self, etichetta: str):
+        """Un errore da mostrare. Il contatore serve al tick, che da lì arma i
+        due secondi di vita dell'avviso: due errori uguali di fila sono la
+        STESSA stringa, e senza un numero che cambia il secondo eredita il
+        timer del primo e sparisce in una frazione di secondo."""
+        self._stato, self._etichetta = PRONTO, etichetta
+        self._errore_n += 1
 
     def _mostra_icona(self, nome: str):
         """Mette il simbolo nella barra dei menu, solo se è cambiato."""
@@ -567,6 +581,11 @@ class App(rumps.App):
                 anteprima_nuova = ev[1]
             elif isinstance(ev, tuple):
                 self._stato, self._etichetta = ev[0], ev[1]
+                if ev[1] in ERRORI:
+                    # arriva dal thread di trascrizione: qui è appena uscito
+                    # dalla coda, quindi è un errore NUOVO anche se la stringa
+                    # è identica a quello di prima
+                    self._errore_n += 1
                 if len(ev) > 2:
                     testo_nuovo = ev[2]
 
@@ -586,6 +605,42 @@ class App(rumps.App):
 
         if self._etichetta == ATTESA and time.time() >= self._fine_attesa:
             self._etichetta = self._etichetta_prima
+
+        # L'errore è un avviso, non uno stato: dopo DURATA_ERRORE la barra torna
+        # da sola all'invito e il triangolino sparisce. Il timer si arma QUI e
+        # non nei quattro punti che generano un errore (_ferma ne scrive due a
+        # mano, _elabora ne mette due in coda da un altro thread): un posto
+        # solo, e nessun errore futuro può dimenticarsi di far scattare il
+        # ritorno.
+        if self._etichetta in ERRORI:
+            if self._errore_n != self._errore_armato:
+                # 🔴 Il timer si arma sul NUMERO dell'errore, non sulla sua
+                # stringa: due ⌘S a vuoto di fila danno due volte lo stesso
+                # ERR_CORTO, e confrontando le stringhe il secondo ereditava il
+                # timer del primo, restando a video una frazione di secondo.
+                self._errore_armato = self._errore_n
+                self._fine_errore = time.time() + DURATA_ERRORE
+                # A barra chiusa l'errore non si vedrebbe affatto: nessuno dei
+                # quattro punti chiama apri(). La apriamo noi — e ce la
+                # riprendiamo quando scade, ma SOLO se l'abbiamo aperta noi: se
+                # stava già lì con del testo dentro, chiuderla gli porterebbe
+                # via il lavoro sotto il naso.
+                p = self._crea_pannello()
+                if not p.e_aperto():
+                    self._barra_per_errore = True
+                    p.apri()
+            elif time.time() >= self._fine_errore:
+                self._fine_errore = 0.0
+                self._etichetta = self.invito
+                if self._barra_per_errore:
+                    self._barra_per_errore = False
+                    if self._pannello is not None:
+                        self._pannello.chiudi()
+        elif self._fine_errore:
+            # è arrivato dell'altro (una registrazione nuova, una copia): non
+            # lasciare acceso un timer che punta a un errore che non c'è più
+            self._fine_errore = 0.0
+            self._barra_per_errore = False
 
         if anteprima_nuova is not None:
             p = self._crea_pannello()
@@ -729,10 +784,10 @@ class App(rumps.App):
         secondi = time.time() - self._inizio
         pezzi, self._pezzi = self._pezzi, []
         if not pezzi or secondi < 0.6:
-            self._stato, self._etichetta = PRONTO, ERR_CORTO
+            self._segnala_errore(ERR_CORTO)
             return
         if durata_voce(pezzi) < 0.25:
-            self._stato, self._etichetta = PRONTO, ERR_VOCE
+            self._segnala_errore(ERR_VOCE)
             return
         self._stato, self._etichetta = ELABORA, "trascrivo…"
         precedente = self._testo_fisso
