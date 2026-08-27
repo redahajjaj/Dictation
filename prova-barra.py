@@ -289,6 +289,33 @@ def main():
     controlla("una frase da una riga sta su una riga", usato.size.height <= P.RIGA,
               f"alta {round(usato.size.height)}")
 
+    # lo scorrimento non deve andare oltre la fine del testo.
+    #
+    # Il testo entra nel campo PRIMA che _applica gli dia la sua larghezza: se
+    # il campo è ancora quello appena nato, il testo va a capo ogni due
+    # caratteri, la vista si gonfia e con TextKit 2 non si sgonfia più.
+    # Restavano migliaia di punti di scorrimento sopra il vetro vuoto.
+    #
+    # Due accortezze, o il controllo non vede niente:
+    #  - un pannello NUOVO: il difetto vive solo al primo testo di una barra
+    #    appena costruita, e il controllo qui sopra ha già chiamato
+    #    layoutManager() su `p`, che lo ripara;
+    #  - leggere il frame PRIMA di layoutManager(): chiamarlo tira la vista
+    #    fuori da TextKit 2 e corregge l'altezza sotto il naso di chi misura.
+    ELENCO = ("Sistema la barra fluttuante.\n- transizioni animate\n"
+              "- anteprima visibile\n- contrasto 4,5 a 1\n- niente scroll a vuoto")
+    p51 = P.Pannello.alloc().init().inizializza(AppFinta())
+    p51.apri(ELENCO)
+    p51.aggiorna(P.PRONTO, "20 parole")
+    attendi(0.4)
+    alta_testo = p51.testo_view.frame().size.height
+    alta_finestrella = p51.scroll.contentView().bounds().size.height
+    vuoto = alta_testo - alta_finestrella
+    controlla("lo scorrimento non va oltre il testo", vuoto <= 2,
+              f"scorribile {round(vuoto)} punti (campo {round(alta_testo)}, "
+              f"finestrella {round(alta_finestrella)})")
+    p51.chiudi()
+
     # il layout non si rifà se non è cambiato niente
     p.imposta_testo(MEDIO)
     p.aggiorna(P.PRONTO, "7 parole · negli appunti")

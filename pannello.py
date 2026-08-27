@@ -112,6 +112,16 @@ PASSO_ICONE = 36             # caselle fisse: le SF Symbols hanno misure tutte d
 RIGA = 20                    # l'altezza di una riga di testo
 H_NOTA = 18
 TESTO_ALTO_MAX = 200         # oltre, il testo scorre invece di far crescere la barra
+# La larghezza che il campo di testo avrà da grande. Serve alla NASCITA della
+# scroll view, non da grande: il testo entra nel campo PRIMA che _applica gli
+# dia la sua misura, e a 10 punti di larghezza il testo va a capo ogni due
+# caratteri. Il campo si gonfia — misurato: 10.652 punti per 12 dettature in
+# coda, contro i 560 veri — e quell'altezza NON si sgonfia più quando la barra
+# si allarga, perché TextKit 2 del testo fuori dalla finestra tiene solo una
+# stima e la corregge solo dove guarda. Risultato: la barra scorreva per
+# migliaia di punti sopra il vetro vuoto. Misurato: nata larga 10 → rotta,
+# 40 → rotta, 80 → rotta, da 136 in su → a posto.
+L_TESTO_MAX = DIST_MAX - FISSO   # 436: il campo della distesa più larga
 ARIA_DISTESA = 26            # sopra + sotto il blocco di testo
 
 STACCO_ICONA = 6             # quanto la barra sta sotto l'icona del microfono
@@ -399,7 +409,8 @@ class Pannello(NSObject):
 
         # il testo: resta modificabile, perché «Copia» copia quello che c'è
         # adesso nel campo (dettatura.py) — se l'hai corretto, vale la correzione
-        self.scroll = NSScrollView.alloc().initWithFrame_(NSMakeRect(0, 0, 10, 10))
+        self.scroll = NSScrollView.alloc().initWithFrame_(
+            NSMakeRect(0, 0, L_TESTO_MAX, TESTO_ALTO_MAX))
         self.scroll.setHasVerticalScroller_(True)
         self.scroll.setAutohidesScrollers_(True)
         # 🔴 Scroller in sovrimpressione, non a lato. Con quelli classici la
@@ -409,7 +420,8 @@ class Pannello(NSObject):
         self.scroll.setScrollerStyle_(NSScrollerStyleOverlay)
         self.scroll.setBorderType_(NSNoBorder)
         self.scroll.setDrawsBackground_(False)
-        self.testo_view = NSTextView.alloc().initWithFrame_(NSMakeRect(0, 0, 10, 10))
+        self.testo_view = NSTextView.alloc().initWithFrame_(
+            NSMakeRect(0, 0, L_TESTO_MAX, TESTO_ALTO_MAX))
         self.testo_view.setEditable_(True)
         self.testo_view.setRichText_(False)
         self.testo_view.setFont_(FONT_TESTO)
@@ -727,8 +739,16 @@ class Pannello(NSObject):
         if testo == self._testo:
             return
         self._testo = testo
-        self._sincronizza_testo()
+        # PRIMA il layout, POI il testo. _sincronizza_testo scrive nel campo e
+        # subito dopo lo scorre in fondo: se il campo non ha ancora la
+        # larghezza che gli spetta, si scorre in fondo a un'altezza che non è
+        # quella vera, e la barra resta con migliaia di punti di scorrimento
+        # sopra il vuoto. _ridisegna legge self._testo — già aggiornato qui
+        # sopra — e non tocca mai il campo, quindi invertirli non gli toglie
+        # niente. 🔴 Ma fra le due righe il CAMPO ha ancora il testo vecchio:
+        # non infilarci in mezzo niente che chiami testo_corrente().
         self._ridisegna()
+        self._sincronizza_testo()
 
     @objc.python_method
     def _sincronizza_testo(self):
