@@ -24,7 +24,8 @@ cp -R dist/Dettatura.app /Applications/
 # un hash diverso ogni volta (cambiano l'eseguibile, base_library.zip e la
 # firma di conseguenza). Con la firma ad-hoc di serie l'identità dell'app PER
 # macOS È QUELL'HASH — «designated => cdhash H"…"» — quindi ogni ricompilazione
-# è un'app nuova, e Accessibilità e Microfono vanno riconcessi da capo.
+# è un'app nuova, e il Microfono va riconcesso da capo (la scorciatoia no:
+# dal 12/9 è Carbon e non chiede permessi).
 # Ancorando il requisito all'identificatore invece che all'hash, l'identità
 # resta la stessa attraverso le build.
 codesign --force --deep -s - --identifier com.reda.dettatura \

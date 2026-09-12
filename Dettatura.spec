@@ -6,7 +6,9 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[("vocabolario.txt", "."), ("correzioni.txt", ".")],
-    hiddenimports=["pynput.keyboard._darwin", "pynput.mouse._darwin"],
+    # niente hiddenimports: la scorciatoia è Carbon via ctypes (scorciatoia.py),
+    # pynput non c'è più
+    hiddenimports=[],
     hookspath=[], hooksconfig={}, runtime_hooks=[],
     excludes=["tkinter", "matplotlib", "PIL", "pytest"],
     noarchive=False, optimize=0,

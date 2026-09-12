@@ -75,12 +75,14 @@ appunti finisce sempre il testo completo. **Svuota** ricomincia da capo.
 L'app è già installata in **/Applications/Dettatura.app**. Doppio clic: compare 🎙
 in alto a destra, e basta.
 
-Alla prima dettatura macOS chiede due permessi — Impostazioni di Sistema → Privacy e sicurezza:
+Alla prima dettatura macOS chiede un solo permesso — Impostazioni di Sistema → Privacy e sicurezza:
 
 | Permesso | Serve a | Se lo neghi |
 |---|---|---|
 | **Microfono** | registrare | non funziona niente |
-| **Monitoraggio input** | la scorciatoia ⌘S | apri la barra dal 🎙 e premi il microfono |
+
+La scorciatoia ⌘S **non chiede permessi** (dal 12/9 è registrata con Carbon, come fanno
+Alfred e Raycast): niente Accessibilità, niente Monitoraggio input.
 
 Per averla sempre pronta: Impostazioni → Generali → Elementi login → **+** → Dettatura.
 
@@ -136,18 +138,20 @@ e quanti nomi ha azzeccato. Utile dopo aver toccato il vocabolario o le istruzio
 
 ## Cambiare la scorciatoia
 
-In `.env`, sintassi pynput:
+In `.env` (modificatori fra parentesi angolari, più un tasto: lettere, cifre, `<space>`, `<f1>`…):
 ```
 DETTATURA_HOTKEY=<cmd>+s
+```
+Poi riavvia l'app. Per provare che la combinazione arriva davvero, ad app chiusa:
+```bash
+./ferma.sh && ./.venv/bin/python prova-scorciatoia.py
 ```
 
 ## Se si blocca
 
-**⌘⇧⌥Q la chiude sempre**, anche se è piantata: l'ascolto dei tasti gira su un
-thread suo, quindi risponde anche quando il resto è fermo. Serve perché un'app
+**⌘⇧⌥Q la chiude** finché il suo thread principale risponde. Se è piantata
+del tutto, da terminale: `~/Progetti/dettatura/ferma.sh` — serve perché un'app
 della barra dei menu **non compare nell'elenco «Uscita forzata»**.
-
-Da terminale: `~/Progetti/dettatura/ferma.sh`
 
 ## Se qualcosa non va
 
@@ -155,7 +159,7 @@ Da terminale: `~/Progetti/dettatura/ferma.sh`
 |---|---|
 | ⚠️ nella barra | lancia `--check` (sopra): quasi sempre è la chiave Groq scaduta |
 | Non vedo l'icona 🎙 | la barra è piena e macOS la nasconde: togli qualche icona, o su Mac col notch riduci gli elementi. `pgrep -f Dettatura` dice se sta girando |
-| La scorciatoia non fa niente | manca *Monitoraggio input*. Intanto apri la barra dal 🎙 e premi il microfono |
+| La scorciatoia non fa niente | guarda `dettatura.log` (accanto allo storico): l'ultima riga deve dire «scorciatoia ⌘S registrata», e ogni pressione lascia «⌘S premuta». Se non c'è «premuta», l'app non sta girando (`pgrep -f Dettatura`) o un'altra app ha preso ⌘S prima di lei |
 | «Microfono non disponibile» | manca il permesso Microfono, o un'altra app lo tiene occupato |
 | Trascrive in inglese | il dettato era troppo corto: Whisper indovina la lingua sui primi secondi |
 | Si blocca fermando la registrazione | non dovrebbe più: lo stream audio si chiude fuori dal thread principale. Se succede, ⌘⇧⌥Q e scrivimi cosa stavi facendo |

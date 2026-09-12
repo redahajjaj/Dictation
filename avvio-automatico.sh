@@ -10,10 +10,10 @@
 # `launchctl list | grep reda`. Verificato: l'app parte, macOS la riconosce come
 # com.reda.dettatura, e il lock a istanza singola continua a funzionare.
 #
-# 🔴 PRIMA di accenderlo serve l'Accessibilità, o al risveglio del Mac ti
-# ritrovi l'app aperta con la scorciatoia morta. Come si controlla:
-#     open -a Dettatura --stderr /tmp/d.err ; sleep 3 ; cat /tmp/d.err
-#   vuoto = a posto · «This process is not trusted» = manca il permesso
+# La scorciatoia non ha bisogno di permessi (Carbon, dal 12/9): l'unico
+# permesso che l'app chiede è il Microfono, alla prima dettatura. Se al
+# risveglio del Mac qualcosa non va, lo dice `dettatura.log` accanto allo
+# storico: l'ultima riga deve essere «scorciatoia ⌘S registrata».
 set -e
 
 ETICHETTA="com.reda.dettatura"

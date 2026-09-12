@@ -2,6 +2,7 @@
 __pycache__/
 .env
 storico.md
+dettatura.log
 build/
 dist/
 .dettatura.lock
