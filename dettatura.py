@@ -931,11 +931,18 @@ class App(rumps.App):
             self._pannello.aggiorna(self._stato, self._etichetta, livello)
 
     def _niente_microfono(self):
-        """Il microfono non c'è: si smette di fingere di registrare."""
+        """Il microfono non c'è: si smette di fingere di registrare.
+
+        Lo spegnimento va chiesto lo stesso: se PortAudio era solo LENTO, fra
+        un secondo lo stream si apre davvero — e senza questa riga resterebbe
+        acceso per sempre, con il pallino arancione di macOS a dire che
+        Dettatura sta ascoltando quando non sta facendo niente."""
         self.registrando = False
         self._ciclo_vivo = False
         self._mic_chiesto = 0.0
+        self._giro_reg += 1
         self._pezzi = []
+        self.mic.spegni()
         self._segnala_errore(ERR_MIC)
 
     # -- registrazione --------------------------------------------------------
