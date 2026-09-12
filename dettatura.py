@@ -390,6 +390,40 @@ def etichetta_tasti(spec: str) -> str:
     )
 
 
+PANNELLO_ACCESSIBILITA = (
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+)
+
+
+def accessibilita(chiedi: bool = False) -> bool:
+    """Dice se abbiamo il permesso di leggere i tasti — e se vuoi, lo chiede.
+
+    🔴 Senza questo permesso la scorciatoia è MORTA E MUTA. L'app parte, l'icona
+    c'è, il pannello si apre col clic: tutto sembra a posto, e ⌘S semplicemente
+    non arriva mai. Il 12/9 l'app ha girato così per due giorni, e l'unico modo
+    di accorgersene era lanciarla da terminale con `--stderr` e leggere una riga
+    di pynput che dentro un .app non legge nessuno.
+
+    Il permesso non si perde per le ricompilazioni — a quello pensa già la firma
+    stabile di installa.sh, che àncora l'identità dell'app al suo identificatore
+    invece che all'hash (verificato: `codesign -d -r-` stampa «designated =>
+    identifier "com.reda.dettatura"»). Ma sparire può sparire lo stesso, e
+    quando succede l'app deve DIRLO invece di restare lì muta.
+
+    Con `chiedi` a True macOS mostra il suo invito («…vuole controllare questo
+    computer»), che porta dritto al pannello giusto. Lo mostra una volta sola:
+    per questo resta anche la voce nel menu.
+    """
+    try:
+        from ApplicationServices import AXIsProcessTrustedWithOptions
+        # kAXTrustedCheckOptionPrompt è esattamente questa stringa: scritta a
+        # mano, così non serve importare HIServices anche dentro il bundle
+        return bool(AXIsProcessTrustedWithOptions({"AXTrustedCheckOptionPrompt": chiedi}))
+    except Exception as e:
+        print(f"permesso non verificabile: {e}", file=sys.stderr)
+        return True   # nel dubbio zitti: un falso allarme è peggio di nessuno
+
+
 class App(rumps.App):
     # l'app viva, per chi la deve raggiungere da fuori: il delegate che riceve
     # il clic sull'icona nel Dock lo costruisce rumps e non ci conosce
@@ -448,23 +482,68 @@ class App(rumps.App):
             rumps.MenuItem("Apri il vocabolario", callback=self.apri_vocabolario),
             rumps.MenuItem("Apri lo storico", callback=self.apri_storico),
             None,
+            rumps.MenuItem("Permesso dei tasti…", callback=self.apri_accessibilita),
             rumps.MenuItem("Esci", callback=rumps.quit_application),
         ]
 
-        scorciatoia = self.scorciatoia
+        self._ascolto = None            # il listener dei tasti, per poterlo rifare
+        self._tasti_morti = False       # il tap non è partito: lo diciamo a schermo
+        self._avviso_permesso = False   # l'abbiamo già mostrato una volta?
+        self._prossima_prova = 0.0      # quando ricontrollare il permesso
+        self._invito_vero = self.invito  # l'invito normale, da riprendere dopo
+        self._avvia_ascolto(chiedi_permesso=True)
+
+        rumps.Timer(self._tick, 0.1).start()
+
+    # -- l'ascolto dei tasti --------------------------------------------------
+    def _avvia_ascolto(self, chiedi_permesso: bool = False) -> bool:
+        """Accende la scorciatoia globale — e CONTROLLA che sia viva davvero.
+
+        🔴 pynput non solleva niente quando manca l'Accessibilità: scrive una
+        riga su stderr (che dentro un .app non legge nessuno), poi `start()`
+        ritorna tranquillo e il listener resta muto per sempre. Il vecchio
+        try/except qui attorno era una rete che non poteva prendere niente.
+
+        La prova vera non è «start() non ha protestato», è che il THREAD sia
+        ancora vivo dopo wait(): senza permesso CGEventTapCreate torna None e
+        quel thread esce subito. Verifichiamo l'effetto, non l'uscita.
+        """
         uscita = self.cfg.get("DETTATURA_USCITA", "<cmd>+<shift>+<alt>+q")
         try:
+            if self._ascolto is not None:
+                self._ascolto.stop()
             # l'ascolto dei tasti gira su un thread suo: la scorciatoia di
             # emergenza funziona anche se il thread principale è bloccato,
             # e os._exit non passa dal run loop (che potrebbe essere fermo).
-            keyboard.GlobalHotKeys({
-                scorciatoia: self._da_scorciatoia,
+            self._ascolto = keyboard.GlobalHotKeys({
+                self.scorciatoia: self._da_scorciatoia,
                 uscita: self._uscita_di_emergenza,
-            }).start()
+            })
+            self._ascolto.start()
+            self._ascolto.wait()        # finché il tap non è stato tentato
         except Exception as e:
             print(f"scorciatoia non attivata: {e}", file=sys.stderr)
+            self._ascolto = None
 
-        rumps.Timer(self._tick, 0.1).start()
+        # due prove invece di una: IS_TRUSTED lo scrive pynput appena parte il
+        # thread (deterministico, dice se il permesso c'era), is_alive() dice se
+        # il tap è nato davvero (copre anche i fallimenti per altri motivi).
+        # Provato: su 20 avvii col tap morto, is_alive() non ha mai mentito.
+        vivo = (
+            self._ascolto is not None
+            and self._ascolto.is_alive()
+            and self._ascolto.IS_TRUSTED
+        )
+        self._tasti_morti = not vivo
+        if vivo:
+            self.invito = self._invito_vero
+        else:
+            self.invito = f"manca l'Accessibilità: {self.tasti} non funziona"
+            print(f"{self.tasti} non funziona: manca l'Accessibilità", file=sys.stderr)
+            if chiedi_permesso:
+                accessibilita(chiedi=True)   # l'invito di macOS, se non l'ha già dato
+        self._etichetta = self.invito
+        return vivo
 
     # -- il clic sull'icona non deve più aprire il menu, ma il pannello --------
     def _aggancia_icona(self):
@@ -538,6 +617,20 @@ class App(rumps.App):
         STORICO.touch()
         subprocess.run(["open", "-t", str(STORICO)])
 
+    def apri_accessibilita(self, _):
+        """Il pannello dove si accende il permesso dei tasti.
+
+        macOS il suo invito lo mostra una volta sola: se l'hai chiuso, questa è
+        la strada che resta.
+
+        🔴 E se la spunta c'è ma il permesso resta morto (12/9: riaccendere
+        l'interruttore non è bastato), l'unica cosa che ha funzionato è stato
+        ripulire lo stato salvato da macOS e ridarlo da capo:
+
+            tccutil reset Accessibility com.reda.dettatura
+        """
+        subprocess.run(["open", PANNELLO_ACCESSIBILITA])
+
     # -- pannello -------------------------------------------------------------
     def _crea_pannello(self) -> Pannello:
         if self._pannello is None:
@@ -592,6 +685,22 @@ class App(rumps.App):
     def _tick(self, _):
         if not self._icona_agganciata:
             self._aggancia_icona()
+
+        if self._tasti_morti and time.time() >= self._prossima_prova:
+            self._prossima_prova = time.time() + 2.0
+            # Il permesso può arrivare mentre l'app è già aperta — lo accendi
+            # nelle Impostazioni senza chiudere niente — ma il listener nato
+            # senza tap resta morto per sempre: va rifatto da capo. Ogni 2 s e
+            # non a ogni tick: sono 10 domande al secondo al demone di sistema.
+            if accessibilita():
+                self._avvia_ascolto()
+            if self._tasti_morti and not self._avviso_permesso:
+                # Un'app senza scorciatoia è inutile: la barra si apre da sola e
+                # lo dice, invece di restare muta con l'icona tutta a posto.
+                self._avviso_permesso = True
+                p = self._crea_pannello()
+                if not p.e_aperto():
+                    p.apri()
 
         testo_nuovo = None
         anteprima_nuova = None
@@ -869,6 +978,14 @@ def _autodiagnosi() -> int:
     print(f"vocabolario: {len(carica_vocabolario())} voci   ({'ok' if VOCABOLARIO.exists() else 'MANCA'})")
     print(f"correzioni : {len(carica_correzioni())} regole  ({'ok' if CORREZIONI.exists() else 'MANCA'})")
     print(f"chiave Groq: {'presente (…' + chiave[-6:] + ')' if chiave else 'MANCANTE'}")
+    # il guasto che rende l'app inutile senza dirlo: installa.sh finisce qui,
+    # quindi ogni installazione se ne accorge subito invece che fra due giorni
+    tasti = etichetta_tasti(cfg.get("DETTATURA_HOTKEY", HOTKEY_DEFAULT))
+    if accessibilita():
+        print(f"scorciatoia: {tasti}   (Accessibilità concessa)")
+    else:
+        print(f"scorciatoia: {tasti} NON FUNZIONA — manca l'Accessibilità.")
+        print(f"             accendila qui:  open '{PANNELLO_ACCESSIBILITA}'")
     if not chiave:
         return 1
     try:
