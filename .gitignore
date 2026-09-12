@@ -6,6 +6,11 @@ build/
 dist/
 .dettatura.lock
 
+# roba del Finder: la posizione delle icone e l'icona personalizzata della
+# cartella (si chiama "Icon" + un ritorno a capo, per questo il ?)
+.DS_Store
+Icon?
+
 # gli scatti grezzi della barra vera: 15 MB, e la tavola montata basta
 .scratch/barra-liquid-glass/prototipo/barra-vera/
 
