@@ -7,13 +7,21 @@ build/
 dist/
 .dettatura.lock
 
+# Il vocabolario e le correzioni VERI contengono i nomi di chi usa l'app —
+# clienti, colleghi, progetti. Nel repo ci stanno solo i «.esempio»: l'app ne
+# fa una copia al primo avvio, e da lì in poi la tua resta tua.
+vocabolario.txt
+correzioni.txt
+
+# Le note di lavoro: prototipi, screenshot di prova, discussioni interne.
+# Erano 38 MB su 39 e non servono a chi clona.
+.scratch/
+
 # roba del Finder: la posizione delle icone e l'icona personalizzata della
 # cartella (si chiama "Icon" + un ritorno a capo, per questo il ?)
 .DS_Store
 Icon?
 
-# gli scatti grezzi della barra vera: 15 MB, e la tavola montata basta
-.scratch/barra-liquid-glass/prototipo/barra-vera/
 
 # gli intermedi di fai-icona.py: la sorgente e l'.icns si tengono, il resto no
 _anteprima-bundle/

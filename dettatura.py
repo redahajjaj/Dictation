@@ -110,13 +110,21 @@ LOG = BASE / "dettatura.log"
 
 
 def _primo_avvio() -> None:
-    """Al primo avvio da .app, semina i file di configurazione se mancano."""
-    if RISORSE == BASE:
-        return
+    """Semina i file di configurazione che mancano: vocabolario, correzioni, .env.
+
+    Il vocabolario vero contiene i nomi di chi usa l'app (clienti, colleghi),
+    quindi git lo ignora: nel repo ci sono solo i «.esempio». La copia si fa da
+    sola al primo avvio — così chi clona può dettare senza leggere niente.
+    """
     for nome in ("vocabolario.txt", "correzioni.txt"):
-        origine, destinazione = RISORSE / nome, BASE / nome
-        if origine.exists() and not destinazione.exists():
-            destinazione.write_text(origine.read_text(encoding="utf-8"), encoding="utf-8")
+        destinazione = BASE / nome
+        if destinazione.exists():
+            continue
+        esempio = nome.replace(".txt", ".esempio.txt")
+        for origine in (RISORSE / nome, RISORSE / esempio):
+            if origine.exists():
+                destinazione.write_text(origine.read_text(encoding="utf-8"), encoding="utf-8")
+                break
     if not ENV.exists():
         ENV.write_text(
             f"GROQ_API_KEY=\nDETTATURA_HOTKEY={HOTKEY_DEFAULT}\nDETTATURA_LLM=\n",
@@ -207,7 +215,7 @@ def carica_vocabolario() -> list[str]:
 
 
 def carica_correzioni() -> list[tuple[re.Pattern, str]]:
-    """«Acmelux = byteelux, by tea lux» → regex che riscrivono la forma giusta.
+    """«Acmelux = acme lux, akme lux» → regex che riscrivono la forma giusta.
 
     Le varianti più lunghe vanno cercate per prime, altrimenti una corta
     contenuta in una lunga la spezzerebbe a metà.

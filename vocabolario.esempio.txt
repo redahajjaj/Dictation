@@ -1,0 +1,57 @@
+# Vocabolario — i nomi che Whisper sbaglierebbe.
+# Una voce per riga. Le righe che iniziano con # sono ignorate.
+# Vengono passate a Whisper come suggerimento e all'LLM come lista di correzione.
+#
+# Questo è l'ESEMPIO. Al primo avvio l'app ne fa una copia chiamata
+# vocabolario.txt: quella è la tua, va modificata, e git la ignora.
+# Mettici i nomi dei tuoi progetti, clienti e colleghi: più sono precisi,
+# meno correggi a mano.
+
+# --- progetti e aziende ---
+Acmelux
+Nordvento
+Lumiera
+
+# --- persone ---
+Mario Rossi
+Giulia Bianchi
+
+# --- stack ---
+Next.js
+React
+TypeScript
+Tailwind
+Payload
+Supabase
+Postgres
+pgvector
+Prisma
+n8n
+Docker
+docker-compose
+Caddy
+nginx
+Stripe
+webhook
+Resend
+Cloudflare
+VPS
+launchd
+Groq
+Ollama
+Whisper
+Claude Code
+Warp
+Obsidian
+Cursor
+GitHub
+repo
+commit
+push
+deploy
+build
+endpoint
+middleware
+server action
+env
+API key

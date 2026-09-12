@@ -1,0 +1,12 @@
+# Solo le dipendenze dirette: le altre (certifi, cffi, six…) arrivano da sole.
+# macOS 12+ e Python 3.11+.
+
+rumps>=0.4              # l'icona nella barra dei menu
+pyobjc-framework-Cocoa>=11.0    # la barra di vetro
+pyobjc-framework-Quartz>=11.0   # finestre, clic fuori, screenshot dei banchi di prova
+sounddevice>=0.5        # il microfono
+soundfile>=0.13         # scrivere il .wav da mandare a Whisper
+numpy>=2.0              # il livello della voce che disegna l'onda
+requests>=2.32          # le chiamate a Groq
+
+pyinstaller>=6.10       # serve solo a ./installa.sh, non all'app che gira

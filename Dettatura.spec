@@ -1,11 +1,20 @@
 # -*- mode: python ; coding: utf-8 -*-
 # Bundle vero: identità propria, quindi macOS chiede i permessi a "Dettatura"
 # e se li ricorda anche quando Homebrew aggiorna Python.
+import os
+
+# I file veri (vocabolario.txt, correzioni.txt) contengono i nomi di chi usa
+# l'app e git li ignora: su un clone appena fatto non esistono ancora. Si
+# imbarca quello che c'è — l'app semina il resto dagli esempi al primo avvio.
+_config = [f for f in ("vocabolario.txt", "correzioni.txt",
+                       "vocabolario.esempio.txt", "correzioni.esempio.txt")
+           if os.path.exists(f)]
+
 a = Analysis(
     ["dettatura.py"],
     pathex=[],
     binaries=[],
-    datas=[("vocabolario.txt", "."), ("correzioni.txt", ".")],
+    datas=[(f, ".") for f in _config],
     # niente hiddenimports: la scorciatoia è Carbon via ctypes (scorciatoia.py),
     # pynput non c'è più
     hiddenimports=[],

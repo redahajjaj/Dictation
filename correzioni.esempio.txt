@@ -1,0 +1,54 @@
+# Come Whisper SENTE  →  come si SCRIVE.
+#
+#   forma giusta = variante, altra variante, altra ancora
+#
+# Le varianti si cercano senza distinguere maiuscole e accenti, come parole intere.
+# Questo passaggio non usa l'LLM: è una sostituzione secca, quindi non sbaglia mai.
+# Quando la dettatura storpia un nome, aggiungi qui la storpiatura e non succede più.
+#
+# Questo è l'ESEMPIO. Al primo avvio l'app ne fa una copia chiamata
+# correzioni.txt: quella è la tua, va modificata, e git la ignora.
+
+# --- progetti ---
+Acmelux = acme lux, acmelucks, akme lux, acme lucks
+Nordvento = nord vento, nordventto, nor devento
+Lumiera = lumiere, lu miera, lumierra
+
+# --- persone ---
+Mario Rossi = mario rosi, marior ossi
+Giulia Bianchi = giulia bianci, giuliab ianchi
+
+# --- infrastruttura ---
+VPS = wps, v p s, vipiesse, vi pi esse, ups
+Groq = grok, grock, groc, grokin, croc, grox, groks, crock
+docker compose = dr. compose, doctor compose, docker compos, dock compose, docker composto
+Docker = docher, doker
+Caddy = keddy, cadi, kadi
+nginx = engine x, engimix, enginex
+Supabase = supabeis, supa base, super base
+Postgres = postgress, post gres, postgrass
+pgvector = pg vector, pigi vector, pievector
+Next.js = next gs, nex gs, nextjes, next js
+Tailwind = teilwind, tail wind, tailuind
+Payload = pei load, pay load
+n8n = enne otto enne, n otto n, nathan, en eight en
+Stripe = straip, straipe, stripes
+Resend = risend, ri send
+Cloudflare = cloud flare, claudflare, cloud fler
+launchd = lonch di, launch d, lonchdi
+webhook = web hook, uebhuk, web uk
+endpoint = end point
+deploy = diploi, deploi
+repo = repò, ripo
+commit = commìt, comit
+push = pusc, pushh
+build = bild, biuld
+env = e n v, enve
+API key = api chei, ei pi ai key
+
+# --- strumenti quotidiani ---
+Claude Code = clod code, cloud code, claud code, clode code
+Warp = uorp, warpe, orp
+Obsidian = obsidian, opsidian, obsidien
+Cursor = corsor, kersor
+GitHub = git hab, git ab

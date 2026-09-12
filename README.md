@@ -70,12 +70,33 @@ aperta**: puoi copiare, incollare, e continuare a dettare senza riaprire niente.
 riga vuota — puoi dettare un pensiero, fermarti, pensare, e riprendere. Negli
 appunti finisce sempre il testo completo. **Svuota** ricomincia da capo.
 
+## Installare — 5 minuti
+
+Serve **macOS 12+**, **Python 3.11+** e una chiave Groq (gratuita, su
+[console.groq.com/keys](https://console.groq.com/keys)).
+
+```bash
+git clone git@github.com:redahajjaj/Dictation.git dettatura && cd dettatura
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python dettatura.py     # primo avvio: crea .env, vocabolario e correzioni
+```
+
+1. Apri `.env` e incolla la chiave: `GROQ_API_KEY=gsk_...` (⌃C per fermare il primo avvio)
+2. `./installa.sh` — compila l'app, la mette in **/Applications** e la apre
+3. Alla prima dettatura macOS chiede il **Microfono**: concedilo
+4. **⌘S**, parli, **⌘S**. Il testo è già negli appunti.
+
+Il vocabolario e le correzioni nascono da `vocabolario.esempio.txt` e
+`correzioni.esempio.txt`: le copie che l'app crea sono tue, git le ignora.
+Mettici i nomi che detti spesso — è quello che fa la differenza fra
+«by tea lux» e «Acmelux».
+
 ## Accendere
 
-L'app è già installata in **/Applications/Dettatura.app**. Doppio clic: compare 🎙
-in alto a destra, e basta.
+Una volta installata: doppio clic su **/Applications/Dettatura.app** e compare 🎙
+in alto a destra.
 
-Alla prima dettatura macOS chiede un solo permesso — Impostazioni di Sistema → Privacy e sicurezza:
+Il permesso — Impostazioni di Sistema → Privacy e sicurezza:
 
 | Permesso | Serve a | Se lo neghi |
 |---|---|---|
@@ -112,8 +133,9 @@ Nessun riavvio: il file viene riletto all'avvio dell'app.
 
 ## Modificare vocabolario e correzioni
 
-Vivono **fuori** dal bundle, in `~/Progetti/dettatura/`, quindi si toccano senza ricompilare:
-salvi il file e riparte corretto al prossimo avvio dell'app.
+Vivono **fuori** dal bundle — nella cartella del repo, o in
+`~/Library/Application Support/Dettatura/` se il repo non c'è — quindi si toccano
+senza ricompilare: salvi il file e riparte corretto al prossimo avvio dell'app.
 
 Si ricompila solo dopo aver cambiato `dettatura.py`:
 ```bash
@@ -150,7 +172,7 @@ Poi riavvia l'app. Per provare che la combinazione arriva davvero, ad app chiusa
 ## Se si blocca
 
 **⌘⇧⌥Q la chiude** finché il suo thread principale risponde. Se è piantata
-del tutto, da terminale: `~/Progetti/dettatura/ferma.sh` — serve perché un'app
+del tutto, da terminale: `./ferma.sh` dalla cartella del repo — serve perché un'app
 della barra dei menu **non compare nell'elenco «Uscita forzata»**.
 
 ## Se qualcosa non va
