@@ -34,6 +34,8 @@
 | `ferma.sh` | `pkill -9` (un'app `LSUIElement` non compare in «Uscita forzata») | 4 |
 | `avvio-automatico.sh` | accende/spegne il LaunchAgent `com.reda.dettatura` | 66 |
 | `fai-icona.py` | genera `Dettatura.icns` (Python puro, zero dipendenze) | 539 |
+| `requirements.txt` | le 7 dipendenze dirette (le altre arrivano da sole) | 10 |
+| `*.esempio.txt` | vocabolario e correzioni **finti**, versionati: i veri sono gitignorati | — |
 | `prova-*.py` | banchi di prova isolati (barra, errori, audio finto, **`prova-scorciatoia.py`: ⌘S sintetico**) | — |
 | `dettatura.log` | il **diario** (gitignored, accanto allo storico): avvio, scorciatoia, ogni pressione, ogni dettatura | — |
 
@@ -70,7 +72,7 @@
 1. **Italiano ovunque**: nomi di funzioni, variabili, commenti, messaggi. `_parti`, `_ferma`, `negli_appunti`. Non introdurre nomi inglesi.
 2. **I commenti spiegano il PERCHÉ**, mai il cosa — spesso con la trappola che li ha generati (vedi la firma in `installa.sh`). Se togli un commento del genere, la prossima sessione ricasca nel buco.
 3. **Zero dipendenze inutili**: `fai-icona.py` disegna l'icona con Python puro. Prima di aggiungere un pacchetto, chiedi.
-4. **Config fuori dal bundle.** Dentro un `.app` il codice è sigillato, quindi `vocabolario.txt`, `correzioni.txt`, `.env`, `storico.md` e `dettatura.log` vivono in `~/Progetti/dettatura/` (fallback: `~/Library/Application Support/Dettatura/`). **Si modificano senza ricompilare.** `installa.sh` serve solo dopo aver toccato `dettatura.py` o `pannello.py`.
+4. **Config fuori dal bundle.** Dentro un `.app` il codice è sigillato, quindi `vocabolario.txt`, `correzioni.txt`, `.env`, `storico.md` e `dettatura.log` vivono in `~/Progetti/dettatura/` (fallback: `~/Library/Application Support/Dettatura/`). **Si modificano senza ricompilare.** `installa.sh` serve solo dopo aver toccato `dettatura.py` o `pannello.py`. I primi tre **non sono nel repo**: `_primo_avvio()` li semina dai `.esempio` (e `.env` vuoto) alla prima accensione, da sorgente come da bundle.
 5. **Il testo che vede Reda è prodotto**: i messaggi della barra e del menu si scrivono come frasi vere, non come errori tecnici.
 
 ## Le tre modalità (menu · «Modo»)
@@ -140,6 +142,19 @@ conta quanto ci mette a esistere.
 
 **Prima di dire «fatto»:** `python -m py_compile` sui file toccati → `./installa.sh` (finisce con `--check` e riapre l'app) → **⌘S sintetica sul bundle installato** (un `CGEventPost` di ⌘S dal `.venv`, oppure `prova-scorciatoia.py` ad app chiusa) → `cat dettatura.log` deve mostrare «⌘S premuta → registro…». Poi Reda la prova con le dita: è l'unica cosa che qui non si può simulare al 100%.
 
-## 🔴 Il buco aperto
+## 🔴 Dove vive il codice — ed è PUBBLICO
 
-Il repo **non ha remote**: 20+ commit in una copia sola, su un Mac senza Time Machine. Serve `gh auth login` + `gh repo create dettatura --private --source=. --push` — lo fa Reda.
+`git@github.com:redahajjaj/Dictation.git`, pubblico dal 12/9. Tre conseguenze che
+non si possono dimenticare:
+
+- **`vocabolario.txt` e `correzioni.txt` sono gitignorati.** Contengono i nomi veri
+  (clienti, colleghi, progetti): erano la rubrica di Reda in chiaro. Nel repo ci
+  sono solo `vocabolario.esempio.txt` e `correzioni.esempio.txt`, con nomi finti —
+  `_primo_avvio()` ne fa la copia vera alla prima accensione. **Se scrivi un nome
+  vero dentro un file versionato (README, prova-*.py, commenti), finisce online.**
+- **`.scratch/` è fuori dal repo**: 38 MB su 39 di prototipi, note interne e
+  screenshot che avevano il nome di un cliente scritto *dentro l'immagine*. Resta
+  sul Mac, non si ri-aggiunge.
+- **La storia è stata riscritta** il 12/9 (`filter-branch`) per togliere nomi e
+  `.scratch` da tutti i commit: 37 → 30 commit, `.git` da 49 MB a 1 MB. Chi avesse
+  un vecchio clone deve ri-clonare.
