@@ -155,21 +155,27 @@ def main():
     scatta("01-riposo")
 
     # 02 registra
-    for i in range(30):
-        p.aggiorna(P.REGISTRA, "0:14   ·   premi di nuovo per fermare",
-                   0.2 + 0.7 * abs((i % 9) - 4) / 4.0)
+    # L'onda vive di suo, a 60 fotogrammi al secondo: `aggiorna` le dice solo
+    # quanto forte stai parlando. Per fotografarla al culmine bisogna darle il
+    # volume e poi lasciar girare il run loop, o si scatta l'onda a riposo.
+    p.aggiorna(P.REGISTRA, "0:14   ·   premi di nuovo per fermare", 0.85)
+    attendi(0.35)
     L, A = misure()
     controlla("02 registra: 248x44", (L, A) == (P.NOCC_REGISTRA_L, P.NOCC_A), f"{L}x{A}")
     controlla("02 registra: cronometro", str(p.crono.stringValue()) == "0:14",
               str(p.crono.stringValue()))
     controlla("02 registra: onda a video", not p.onda.isHidden() and not p.crono.isHidden())
+    controlla("02 registra: l'onda è salita", p.onda._liv > 0.6, f"{p.onda._liv:.2f}")
+    controlla("02 registra: il motorino gira", p._t_onda is not None)
     controlla("02 registra: niente parole", p.messaggio.isHidden() and p.scroll.isHidden())
     scatta("02-registra")
 
     # 03 silenzio
-    for _ in range(30):
-        p.aggiorna(P.REGISTRA, "0:03   ·   premi di nuovo per fermare", 0.0)
-    controlla("03 silenzio: onda piatta", max(p.onda._liv) <= P.SILENZIO_ONDA)
+    p.aggiorna(P.REGISTRA, "0:03   ·   premi di nuovo per fermare", 0.0)
+    attendi(0.6)
+    # non va a zero e non deve: a silenzio l'onda resta a respirare, o sembra
+    # che il microfono si sia spento
+    controlla("03 silenzio: l'onda si è calmata", p.onda._liv <= 0.06, f"{p.onda._liv:.3f}")
     controlla("03 silenzio: stessa larghezza", misure() == (P.NOCC_REGISTRA_L, P.NOCC_A))
     scatta("03-silenzio")
 
@@ -243,8 +249,9 @@ def main():
     p.imposta_testo("")
     p.aggiorna(P.PRONTO, P.ERR_VOCE)
     L, A = misure()
-    controlla("09 errore: nocciola con la x", A == P.NOCC_A and not p.b_chiudi.isHidden(),
-              f"{L}x{A}")
+    # niente più ✕: l'errore si ritira da solo dopo due secondi, e un clic
+    # fuori dalla barra la manda via prima
+    controlla("09 errore: nocciola", A == P.NOCC_A, f"{L}x{A}")
     controlla("09 errore: arancione",
               p.b_azione.contentTintColor() == NSColor.systemOrangeColor())
     controlla("09 errore: messaggio", str(p.messaggio.stringValue()) == "Non ho sentito la voce",
@@ -502,27 +509,16 @@ def main():
         # 4. una transizione non deve far credere alla barra di essere trascinata
         controlla("il volo non conta come trascinamento", not p._spostata)
 
-        # --- il segno ⊖ e il risucchio ---------------------------------------
+        # --- la dissolvenza sul posto ----------------------------------------
+        # 🔴 Fino al 12/9 la barra si richiudeva risucchiandosi in una goccia
+        # sul proprio bordo alto, cioè verso la cima dello schermo. Adesso
+        # svanisce dov'è: questi controlli guardano che NON si muova e NON si
+        # stringa mentre se ne va.
         p.imposta_testo(LUNGO)
         p.aggiorna(P.PRONTO, "34 parole")
         attendi(0.5)
-        f = p.b_riduci.frame()
-        A = p.finestra.frame().size.height
-        controlla("il segno c'è nella distesa", not p.b_riduci.isHidden())
-        # 🔴 il tappo sinistro è un semicerchio di raggio 32 centrato in
-        # (32, A-32), e NIENTE ritaglia il tondo: un riquadro che ne esce viene
-        # disegnato sul desktop. Questo controlla i quattro angoli, non il
-        # rettangolo — è il difetto che l'occhio non becca su un fondo scuro.
-        import math
-        cx, cy, r = 32.0, A - 32.0, 32.0
-        fuori = [(x, y) for x in (f.origin.x, f.origin.x + f.size.width)
-                 for y in (f.origin.y, f.origin.y + f.size.height)
-                 if math.hypot(x - cx, y - cy) > r]
-        controlla("il segno sta dentro l'arco della capsula", not fuori,
-                  f"franco {round(r - max(math.hypot(x - cx, y - cy) for x in (f.origin.x, f.origin.x + f.size.width) for y in (f.origin.y, f.origin.y + f.size.height)), 2)}")
-        controlla("il segno non si sovrappone al microfono",
-                  f.origin.y >= p.b_azione.frame().origin.y + p.b_azione.frame().size.height,
-                  f"segno y={round(f.origin.y)} · mic finisce a {round(p.b_azione.frame().origin.y + p.b_azione.frame().size.height)}")
+        controlla("niente bottoni di chiusura nella distesa",
+                  not hasattr(p, "b_riduci") and not hasattr(p, "b_chiudi"))
 
         pieno = p.finestra.frame()
         p.chiudi()
@@ -530,35 +526,41 @@ def main():
         # 🔴 in volo la barra è ancora a video, ma per il resto del mondo è già
         # chiusa: senza questo il battito a 10 Hz le rifà il layout addosso e la
         # fa atterrare visibile invece di sparire
-        controlla("in risucchio la barra si dichiara chiusa", not p.e_aperto())
-        mezzo = p.finestra.frame().size.width
-        controlla("in risucchio si sta stringendo", mezzo < pieno.size.width - 50,
-                  f"{round(pieno.size.width)} → {round(mezzo)}")
-        controlla("in risucchio il bordo alto resta fermo",
-                  abs((p.finestra.frame().origin.y + p.finestra.frame().size.height)
-                      - (pieno.origin.y + pieno.size.height)) <= 1)
-        attendi(0.6)
-        controlla("finito il risucchio la barra è sparita",
+        controlla("in dissolvenza la barra si dichiara chiusa", not p.e_aperto())
+        controlla("in dissolvenza sta svanendo",
+                  0.0 < p.finestra.alphaValue() < 0.95,
+                  f"opacità {p.finestra.alphaValue():.2f}")
+        mezzo = p.finestra.frame()
+        controlla("in dissolvenza non si muove e non si stringe",
+                  abs(mezzo.origin.x - pieno.origin.x) <= 1
+                  and abs(mezzo.origin.y - pieno.origin.y) <= 1
+                  and abs(mezzo.size.width - pieno.size.width) <= 1,
+                  f"{round(pieno.size.width)}x{round(pieno.size.height)} "
+                  f"→ {round(mezzo.size.width)}x{round(mezzo.size.height)}")
+        attendi(0.5)
+        controlla("finita la dissolvenza la barra è sparita",
                   not p.finestra.isVisible() and p._volo is None)
+        controlla("e torna opaca, pronta a riaprirsi",
+                  p.finestra.alphaValue() == 1.0, f"{p.finestra.alphaValue()}")
         dopo = p.finestra.frame()
-        # 🔴 la deriva: ricavando il frame dalla goccia invece di rimettere
-        # quello salvato, con una larghezza dispari si perde un punto per giro
         controlla("il frame torna identico, senza derive",
                   (round(dopo.origin.x), round(dopo.size.width))
                   == (round(pieno.origin.x), round(pieno.size.width)),
                   f"x {round(pieno.origin.x)} → {round(dopo.origin.x)}")
 
-        # riaprire a metà volo taglia il risucchio: la barra resta
+        # riaprire a metà volo taglia la dissolvenza: la barra resta, e opaca
         p.apri()
         attendi(0.4)
         p.chiudi()
         attendi(0.08)
         p.apri()
         attendi(0.5)
-        controlla("riaprire a metà risucchio la salva",
+        controlla("riaprire a metà dissolvenza la salva",
                   p.finestra.isVisible() and p._volo is None
+                  and p.finestra.alphaValue() == 1.0
                   and p.finestra.frame().size.width > 200,
-                  f"larga {round(p.finestra.frame().size.width)}")
+                  f"larga {round(p.finestra.frame().size.width)} "
+                  f"· opacità {p.finestra.alphaValue()}")
 
         # 5. spegnendo l'animazione si torna al salto secco, senza volo
         P.ANIMA = False

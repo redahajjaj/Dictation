@@ -13,8 +13,10 @@ Warp, quello diventa il suo posto: da lì non la sposta più nessuno, nemmeno
 quando la chiudi e la riapri. Per rimandarla a casa si chiude e si riapre l'app —
 niente viene scritto su disco.
 
-Si trascina da qualsiasi punto (tranne il testo e le icone) e non sparisce quando
-lavori altrove.
+Si trascina da qualsiasi punto (tranne il testo e le icone). **Un clic in
+qualsiasi altro punto dello schermo la fa dissolvere sul posto** — non si
+risucchia più verso l'icona, e non ha più un bottone per chiuderla: se ne va da
+sola appena guardi altrove, e la registrazione intanto continua.
 
 Il vetro è quello vero di macOS 26 (`NSGlassEffectView`, stile Regular): **si
 adatta al fondo**, quindi sopra un'app scura diventa scuro. Per questo i colori
@@ -44,11 +46,16 @@ from AppKit import (
     NSButton,
     NSColor,
     NSCompositingOperationSourceOver,
+    NSEvent,
+    NSEventMaskLeftMouseDown,
+    NSEventMaskOtherMouseDown,
+    NSEventMaskRightMouseDown,
     NSFloatingWindowLevel,
     NSFont,
     NSFontAttributeName,
     NSFontWeightMedium,
     NSFontWeightRegular,
+    NSGradient,
     NSImage,
     NSImageOnly,
     NSImageScaleProportionallyDown,
@@ -91,7 +98,14 @@ ERR_CORTO = "troppo corto: riprova"
 ERR_VOCE = "non ho sentito la voce"
 ERR_NIENTE = "non ho sentito niente"
 ERR_GENERICO = "errore: guarda il Terminale"
-ERRORI = frozenset({ERR_CORTO, ERR_VOCE, ERR_NIENTE, ERR_GENERICO})
+# 🔴 Questi due prima erano `rumps.alert`, cioè un NSAlert modale. In un'app
+# senza icona nel Dock un pannello modale può nascere DIETRO a tutto: non lo
+# vedi, il run loop entra in modal mode, e da fuori l'app sembra piantata —
+# rotellina compresa. Un avviso dentro la barra si legge e non blocca niente.
+ERR_MIC = "microfono non disponibile"
+ERR_CHIAVE = "manca la chiave Groq nel .env"
+ERRORI = frozenset({ERR_CORTO, ERR_VOCE, ERR_NIENTE, ERR_GENERICO,
+                    ERR_MIC, ERR_CHIAVE})
 
 # Quando premi la scorciatoia mentre sta ancora trascrivendo: non parte una
 # seconda registrazione, e la barra lo dice invece di sembrare rotta.
@@ -133,12 +147,43 @@ ARIA_DISTESA = 26            # sopra + sotto il blocco di testo
 STACCO_ICONA = 6             # quanto la barra sta sotto l'icona del microfono
 MARGINE_SCHERMO = 8          # quanto respiro lasciarle dai bordi dello schermo
 
-# l'onda: 25 barrette da 3 punti con 2 di gap = 123 punti esatti
-BARRE, LARGA_BARRA, GAP_BARRA = 25, 3.0, 2.0
+# l'onda: 21 barrette da 3 punti con 3 di gap = 123 punti esatti — la stessa
+# larghezza delle 25 di prima, quindi la nocciola non cambia di un pixel; ma con
+# il doppio d'aria fra una barra e l'altra le linee si leggono una per una
+# mentre si allargano e si stringono.
+BARRE, LARGA_BARRA, GAP_BARRA = 21, 3.0, 3.0
 ONDA_L = BARRE * LARGA_BARRA + (BARRE - 1) * GAP_BARRA
 ONDA_A = 22
 X_ONDA, X_CRONO, L_CRONO = 48, 182, 44
 NOCC_REGISTRA_L = 248        # misurata sul prototipo, approvata il 24/8
+
+# --- come respira l'onda -----------------------------------------------------
+# Non è più un istogramma che scorre (le ultime 25 misure, la più recente a
+# destra): quello raccontava il PASSATO e a 10 fotogrammi al secondo scattava.
+# Ora è una fila simmetrica che pulsa dal centro, ridisegnata 60 volte al
+# secondo: l'altezza di ogni barra è il volume di ADESSO, moltiplicato per una
+# cresta che attraversa la fila da destra a sinistra. A silenzio non si spegne,
+# respira piano — "ti sto ascoltando" invece di "sono ferma".
+ONDA_FPS = 1.0 / 60.0
+ONDA_CAMPANA = 0.34          # quanto sono più basse le barre di bordo (0 = tutte uguali)
+# 0,20 e non meno: sotto, a silenzio le barre finiscono tutte contro ONDA_MIN e
+# la fila diventa una riga di puntini identici — il respiro c'è nei numeri e non
+# si vede sullo schermo (provato a 0,13).
+ONDA_FONDO = 0.20            # quanto restano alte a silenzio, in frazione d'altezza
+ONDA_MIN = 2.0               # sotto questo una barra sembra spenta, non bassa
+ONDA_SALITA = 0.55           # quanto svelta sale su un colpo di voce…
+ONDA_DISCESA = 0.10          # …e quanto piano scende: è questo che la fa sembrare viva
+ONDA_VELOCITA = 0.50         # giri al secondo della cresta che attraversa la fila
+ONDA_CRESTE = 1.30           # quante creste ci stanno dentro tutte insieme
+ONDA_OSCILLA = 0.38          # quanto la cresta scava fra una barra e l'altra
+# Blu → viola, in sRGB fisso e non colori di sistema: il vetro si adatta al
+# fondo (chiaro sopra un'app chiara, scuro sopra una scura) e un colore dinamico
+# cambierebbe tinta sotto i piedi all'onda a metà frase.
+ONDA_DA = (0.28, 0.56, 1.00)
+ONDA_A_ = (0.64, 0.40, 0.99)
+# Il punto rosso del REC respira insieme all'onda, sullo stesso orologio.
+REC_RESPIRO = 1.7            # secondi di un respiro intero
+REC_FONDO = 0.70             # quanto si smorza nel punto più basso
 
 # La tinta della capsula. NON è più `setTintColor_` del vetro: macOS la butta
 # via quando la finestra non è key e la rimpiazza con un neutro, così al primo
@@ -168,7 +213,6 @@ ALONE_CRESCITA = 8.0         # quanto l'anello esce dalla casella del bottone
 ALONE_DURATA = 0.55          # tutta la pulsazione, in secondi
 ALONE_SPESSORE = 1.5         # come il filo: oltre, è un contorno disegnato
 ALONE_ALFA = 0.60            # opacità di partenza, poi va a zero
-SILENZIO_ONDA = 0.02
 
 # Le transizioni. 0,30 s con una ease-out ripida: la barra parte veloce e si
 # posa. `CAMediaTimingFunction` non è importabile dal venv (PyObjC non ha i
@@ -184,23 +228,21 @@ DURATA_TRANSIZIONE = 0.30
 DURATA_COMPARSA = 0.16   # la dissolvenza del contenuto, dopo che la capsula è
                          # arrivata: più corta del volo, o sembra un ritardo
 
-# Il risucchio: la barra si accartoccia in una goccia sul proprio bordo alto e
-# sparisce. Quando è a casa, il suo bordo alto È già sotto l'icona — quindi
-# accartocciarsi sul posto È risucchiarsi sotto il microfono, senza un ramo in
-# più; e quando l'hai trascinata lontano si chiude dov'è, che è l'unica cosa
-# sensata: attraversare lo schermo in un quarto di secondo non è una goccia.
+# ENTRARE è ancora una goccia che si apre da sotto l'icona: è da lì che la barra
+# nasce, e il movimento lo racconta.
 GOCCIA_L, GOCCIA_A = 26.0, 4.0
-DURATA_RISUCCHIO = 0.26     # uscire è più svelto che entrare (0,30)
-DURATA_SPARIZIONE = 0.12    # il contenuto se ne va nella prima metà del volo
-# 🔴 La curva è l'OPPOSTO di CURVA. Quella è una ease-out: a un quarto del tempo
-# ha già fatto il 61% della strada — la barra sparirebbe di scatto e poi
-# resterebbe ferma. Questa è una ease-in: al 25% ha fatto il 9%, parte piano e
-# accelera. È l'acqua che se ne va giù.
+# USCIRE no. Fino al 12/9 la barra si risucchiava nella goccia sul proprio bordo
+# alto, cioè verso la cima dello schermo. 🔴 Bocciato da Reda: con la barra
+# parcheggiata accanto a Warp, vederla scappare verso l'alto tira l'occhio dove
+# non c'è niente da guardare. Adesso si dissolve dov'è, senza muovere un punto.
+DURATA_DISSOLVENZA = 0.20
+# Una ease-in: al 25% del tempo ha perso solo il 9% dell'opacità, poi accelera.
+# Con una ease-out sparirebbe di scatto e resterebbe un fantasma appeso.
 try:
-    CURVA_RISUCCHIO = objc.lookUpClass("CAMediaTimingFunction").alloc(
+    CURVA_USCITA = objc.lookUpClass("CAMediaTimingFunction").alloc(
     ).initWithControlPoints____(0.42, 0.0, 1.0, 1.0)
 except Exception:
-    CURVA_RISUCCHIO = None
+    CURVA_USCITA = None
 try:
     CURVA = objc.lookUpClass("CAMediaTimingFunction").alloc().initWithControlPoints____(
         0.2, 0.0, 0.0, 1.0)
@@ -321,9 +363,10 @@ class BarraPanel(NSPanel):
         """Esc deve passare dall'unico imbuto di chiusura.
 
         Prima faceva `orderOut_` di suo e scavalcava `Pannello.chiudi()`: da
-        quando la chiusura è un volo, Esc chiuderebbe di netto mentre il ✕ e il
-        segno si risucchiano — e premuto a metà volo lascerebbe lo stato del
-        volo acceso per sempre.
+        quando la chiusura è un volo, Esc farebbe sparire la barra di netto
+        mentre il clic fuori la dissolve — e premuto a metà volo lascerebbe lo
+        stato del volo acceso per sempre. In più `chiudi()` è l'unico posto che
+        spegne il guardiano dei clic e il motorino dell'onda.
         (il rimando al padrone è un ciclo di ritenzione voluto: l'app non
         rilascia mai il pannello)"""
         p = getattr(self, "padrone", None)
@@ -469,41 +512,91 @@ class Alone(NSView):
 
 
 class Onda(NSView):
-    """Le barrette del volume: le ultime 25 misure, la più recente a destra.
+    """Le linee della voce: una fila simmetrica che si allarga e si stringe.
 
-    A silenzio diventa **una riga sola**: 25 puntini fermi sembravano un layout
-    rotto (visto nel primo giro di scatti del prototipo)."""
+    Ogni barra cresce dal centro, tutte insieme, sul volume di ADESSO — non è
+    più lo storico che scorre. Sopra ci passa una cresta lenta da destra a
+    sinistra, così la fila non è mai un blocco unico che sale e scende: le linee
+    si inseguono. A silenzio non si spegne, respira al 13% — «ti sto
+    ascoltando», invece di una riga morta.
+
+    🔴 Il tempo si legge dall'orologio, non contando i fotogrammi: se il run
+    loop ne perde qualcuno (macOS lo fa appena l'app va in secondo piano)
+    l'onda arriva allo stesso punto invece di rallentare a metà frase. Stessa
+    regola dell'Alone.
+    """
 
     @objc.python_method
     def prepara(self):
-        self._liv = [0.0] * BARRE
+        self._liv = 0.0          # il livello disegnato adesso, smussato
+        self._obiettivo = 0.0    # quello vero, che arriva dal microfono
+        self._fase = 0.0
+        self._t = time.monotonic()
+        # la campana: le barre di bordo più basse delle centrali, calcolata una
+        # volta sola (è la stessa a ogni fotogramma, e sono 60 al secondo)
+        self._campana = [
+            ONDA_CAMPANA + (1.0 - ONDA_CAMPANA)
+            * math.sin(math.pi * (i + 0.5) / BARRE) ** 0.85
+            for i in range(BARRE)
+        ]
+        self._sfumatura = NSGradient.alloc().initWithStartingColor_endingColor_(
+            NSColor.colorWithSRGBRed_green_blue_alpha_(*ONDA_DA, 1.0),
+            NSColor.colorWithSRGBRed_green_blue_alpha_(*ONDA_A_, 1.0),
+        )
         return self
 
     @objc.python_method
     def spingi(self, livello: float):
-        self._liv = self._liv[1:] + [max(0.0, min(1.0, float(livello)))]
-        self.setNeedsDisplay_(True)
+        """Il volume arriva a 10 Hz dal battito dell'app; il disegno va a 60.
+        Qui si prende solo nota: a interpolare ci pensa `battito`."""
+        self._obiettivo = max(0.0, min(1.0, float(livello)))
 
     @objc.python_method
     def azzera(self):
-        self._liv = [0.0] * BARRE
+        self._obiettivo = 0.0
+        self._liv = 0.0
+
+    @objc.python_method
+    def battito(self):
+        """Un fotogramma: fa avanzare la cresta e insegue il volume."""
+        ora = time.monotonic()
+        # un salto lungo (schermo bloccato, app ferma in secondo piano) non deve
+        # far fare un balzo alla cresta: si riparte da dove si era rimasti
+        dt = min(0.1, max(0.0, ora - self._t))
+        self._t = ora
+        self._fase = (self._fase + dt * ONDA_VELOCITA) % 1.0
+        k = ONDA_SALITA if self._obiettivo > self._liv else ONDA_DISCESA
+        # il coefficiente è tarato su 60 fps: se il run loop rallenta il passo si
+        # allunga da sé, invece di far scendere l'onda al rallentatore
+        k = 1.0 - (1.0 - k) ** max(0.25, dt / ONDA_FPS)
+        self._liv += (self._obiettivo - self._liv) * k
+        self.setNeedsDisplay_(True)
 
     def drawRect_(self, _r):
         b = self.bounds()
         cy = b.size.height / 2.0
-        if max(self._liv) <= SILENZIO_ONDA:
-            NSColor.tertiaryLabelColor().setFill()
-            NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                NSMakeRect(0, cy - 1, b.size.width, 2), 1, 1
-            ).fill()
-            return
-        NSColor.labelColor().setFill()
-        for i, v in enumerate(self._liv):
-            h = max(2.0, v * b.size.height)
-            NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-                NSMakeRect(i * (LARGA_BARRA + GAP_BARRA), cy - h / 2.0, LARGA_BARRA, h),
-                LARGA_BARRA / 2.0, LARGA_BARRA / 2.0,
-            ).fill()
+        massimo = b.size.height
+        ampiezza = ONDA_FONDO + (1.0 - ONDA_FONDO) * self._liv
+        # un solo tracciato per tutte le barre: il gradiente si stende una volta
+        # su tutta la fila, non ventuno volte una barra per volta — così il blu
+        # sta a sinistra e il viola a destra, invece di ripetersi in ogni barra
+        fila = NSBezierPath.bezierPath()
+        for i in range(BARRE):
+            # la cresta: la stessa sinusoide letta un po' più in là a ogni barra
+            # (ONDA_CRESTE giri lungo la fila) e un po' più avanti a ogni
+            # fotogramma (la fase). È questo che fa «viaggiare» il movimento.
+            osc = 1.0 - ONDA_OSCILLA * (0.5 + 0.5 * math.cos(
+                2 * math.pi * (ONDA_CRESTE * i / BARRE - self._fase)))
+            h = massimo * self._campana[i] * ampiezza * osc
+            h = max(ONDA_MIN, min(massimo, h))
+            fila.appendBezierPath_(
+                NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                    NSMakeRect(i * (LARGA_BARRA + GAP_BARRA), cy - h / 2.0,
+                               LARGA_BARRA, h),
+                    LARGA_BARRA / 2.0, LARGA_BARRA / 2.0,
+                )
+            )
+        self._sfumatura.drawInBezierPath_angle_(fila, 0.0)
 
 
 class Pannello(NSObject):
@@ -525,6 +618,8 @@ class Pannello(NSObject):
         self._t_spunta = None           # il timer della spunta: tenuto, per non
                                         # farlo spegnere dalla copia precedente
         self._t_alone = None            # il timer dell'anello, uno solo alla volta
+        self._t_onda = None             # i 60 fotogrammi al secondo dell'onda
+        self._spia = None               # il guardiano dei clic fuori dalla barra
         self._firma = None              # la forma già a video: se non cambia, non si tocca
         self._azione_attiva = False     # se l'icona di sinistra fa qualcosa
         # Chi comanda la posizione: finché è False la barra torna sotto l'icona a
@@ -617,20 +712,11 @@ class Pannello(NSObject):
         self.messaggio = self._campo(FONT_MSG)
         self.contenuto.addSubview_(self.messaggio)
 
-        self.b_chiudi = self._icona("xmark", 11, "chiudiClic:", "Chiudi", lato=24)
-        self.contenuto.addSubview_(self.b_chiudi)
-
-        # Il segno che richiude, in alto a sinistra: solo nella distesa. Nella
-        # nocciola sopra il microfono restano 8 punti — misurato, non ci sta
-        # nessun riquadro utile. Riquadro 16 e non LATO_ICONA=28 perché il tappo
-        # sinistro della distesa è un semicerchio pieno (raggio 32 = metà
-        # altezza): a 28 gli angoli uscirebbero dal vetro, e 🔴 il vetro non
-        # ritaglia — clipsToBounds di NSGlassEffectView è False e quello del
-        # contenuto ritaglia al RETTANGOLO, quindi un glifo fuori dalla capsula
-        # finisce disegnato sul desktop.
-        self.b_riduci = self._icona("minus.circle", 12, "riduciClic:",
-                                    "Riduci (Esc)", lato=16)
-        self.contenuto.addSubview_(self.b_riduci)
+        # Qui stavano il ✕ dell'errore e il ⊖ della distesa. Non ci sono più: la
+        # barra si chiude cliccando ovunque fuori da lei (vedi `_spia_clic`),
+        # con Esc, o dal clic sull'icona nella barra dei menu. Un bersaglio da
+        # 16 punti da centrare col mouse per far sparire una cosa che se ne va
+        # da sola era lavoro chiesto a Reda per niente.
 
         # il testo: resta modificabile, perché «Copia» copia quello che c'è
         # adesso nel campo (dettatura.py) — se l'hai corretto, vale la correzione
@@ -812,9 +898,9 @@ class Pannello(NSObject):
         if forma == REGISTRA:
             return NOCC_REGISTRA_L, NOCC_A, 0, ""
         if forma != DISTESA:
+            # niente più coda per il ✕ dell'errore: non c'è più nessun bottone
             largo = _larghezza(self._messaggio(), FONT_MSG)
-            coda = CODA_MSG + (PASSO_ICONE if forma == ERRORE else 0)
-            L = max(NOCC_MIN, int(X_MSG + math.ceil(largo) + MARGINE_CELL + coda))
+            L = max(NOCC_MIN, int(X_MSG + math.ceil(largo) + MARGINE_CELL + CODA_MSG))
             return L, NOCC_A, 0, ""
 
         # la distesa: la larghezza segue la riga più lunga, l'altezza il testo accodato
@@ -856,8 +942,6 @@ class Pannello(NSObject):
             (self.onda, forma == REGISTRA),
             (self.crono, forma == REGISTRA),
             (self.messaggio, nocciola and forma != REGISTRA),
-            (self.b_chiudi, forma == ERRORE),
-            (self.b_riduci, not nocciola),
             (self.scroll, not nocciola),
             (self.conteggio, not nocciola),
             (self.nota, bool(nota)),
@@ -901,7 +985,10 @@ class Pannello(NSObject):
 
         icona, punti, tinta, attiva, aiuto = {
             RIPOSO: ("mic", 15, None, True, f"Detta ({self.tasti})"),
-            REGISTRA: ("stop.fill", 13, NSColor.systemRedColor(), True,
+            # il disco col quadrato scavato, non il quadratino pieno di prima:
+            # accanto a un'onda sfumata un quadrato rosso opaco è l'unica cosa
+            # spigolosa della barra, e si legge come un difetto
+            REGISTRA: ("stop.circle.fill", 15, NSColor.systemRedColor(), True,
                        f"Ferma ({self.tasti})"),
             ELABORA: ("circle.dotted", 15, None, False, None),
             OCCUPATO: ("circle.dotted", 15, None, False, None),
@@ -922,20 +1009,9 @@ class Pannello(NSObject):
             telaio(self.onda, NSMakeRect(X_ONDA, (NOCC_A - ONDA_A) / 2.0, ONDA_L, ONDA_A))
             telaio(self.crono, NSMakeRect(X_CRONO, (NOCC_A - 19) / 2.0, L_CRONO, 19))
         elif nocciola:
-            largo = L - X_MSG - CODA_MSG - (PASSO_ICONE if forma == ERRORE else 0)
-            telaio(self.messaggio, NSMakeRect(X_MSG, (NOCC_A - 20) / 2.0, largo, 20))
-            if forma == ERRORE:
-                telaio(self.b_chiudi, NSMakeRect(L - 36, (NOCC_A - 24) / 2.0, 24, 24))
+            telaio(self.messaggio,
+                   NSMakeRect(X_MSG, (NOCC_A - 20) / 2.0, L - X_MSG - CODA_MSG, 20))
         else:
-            # Il segno, sopra il microfono e nella sua stessa colonna (centro
-            # x = 32, come b_azione: 18 + 28/2). È l'unico punto in alto a
-            # sinistra dove un riquadro ci sta INTERO dentro la capsula: il
-            # tappo è un semicerchio di raggio 32 centrato in (32, A-32), e i
-            # quattro angoli di questo riquadro ne distano al massimo 31,05 —
-            # 0,95 di franco, uguale per ogni altezza della barra.
-            # Il bordo basso tocca esattamente il bordo alto del mic (A-18):
-            # adiacenti, zero sovrapposizione di clic.
-            telaio(self.b_riduci, NSMakeRect(24, A - 18, 16, 16))
             largo = L - FISSO
             blocco = h_testo + (H_NOTA if nota else 0)
             y = (A - blocco) / 2.0
@@ -1089,6 +1165,12 @@ class Pannello(NSObject):
             self._firma = firma
             self._applica(forma, L, A, h_testo, nota, anima)
 
+        # Il motorino dell'onda va acceso QUI e non in `_applica`: quello gira
+        # solo quando la forma cambia, e la barra può essere riaperta mentre
+        # registra (adesso il clic fuori la nasconde senza fermare niente) —
+        # allora la firma è la stessa e `_applica` non passa più.
+        self._battito(forma == REGISTRA and self.finestra.isVisible())
+
         if forma == REGISTRA:
             self.onda.spingi(self._livello)
             trovato = re.search(r"\d+:\d{2}", self._etichetta)
@@ -1162,7 +1244,7 @@ class Pannello(NSObject):
     # -- apertura / chiusura --------------------------------------------------
     @objc.python_method
     def e_aperto(self) -> bool:
-        """🔴 Durante il risucchio la finestra è ancora a video — la sparizione
+        """🔴 Durante la dissolvenza la finestra è ancora a video — la sparizione
         vera sta in fondo al volo — ma per il resto del mondo la barra è già
         chiusa. Senza questa riga il battito a 10 Hz continua a chiamare
         `aggiorna()` e un cambio di forma a metà volo VINCE: la barra atterra
@@ -1240,16 +1322,17 @@ class Pannello(NSObject):
         self._atteso = (round(r.origin.x), round(r.origin.y))
         self.finestra.setFrameOrigin_(r.origin)
 
-    # -- il risucchio ---------------------------------------------------------
+    # -- la comparsa ----------------------------------------------------------
     @objc.python_method
     def _goccia(self, pieno):
-        """Dove va a finire la barra chiudendosi: stesso centro, sul suo bordo alto.
+        """Da dove nasce la barra aprendosi: stesso centro, sul suo bordo alto.
 
         NON si chiede all'icona dove sta: la sua posizione può non esserci
         proprio nell'istante del volo (nei primi secondi dopo l'avvio, o con un
         gestore di menubar di mezzo). E non serve — quando la barra è a casa il
-        suo bordo alto è già appena sotto l'icona, quindi accartocciarsi sul
-        proprio bordo alto È risucchiarsi sotto il microfono."""
+        suo bordo alto è già appena sotto l'icona, quindi nascere dal proprio
+        bordo alto È scendere da sotto il microfono. Serve solo ad APRIRE: per
+        chiudere la barra si dissolve dov'è, senza muoversi."""
         cx = pieno.origin.x + pieno.size.width / 2.0
         alto = pieno.origin.y + pieno.size.height
         return NSMakeRect(cx - GOCCIA_L / 2.0, alto - GOCCIA_A, GOCCIA_L, GOCCIA_A)
@@ -1275,7 +1358,7 @@ class Pannello(NSObject):
         Non `contenuto` e non il filo: quelli SONO la capsula, e dissolverli
         farebbe arrivare una goccia scolorita invece che di vetro."""
         return (self.b_azione, self.onda, self.crono, self.messaggio,
-                self.b_chiudi, self.b_riduci, self.scroll, self.conteggio,
+                self.scroll, self.conteggio,
                 self.nota, self.b_svuota, self.b_copia, self.menu_btn)
 
     @objc.python_method
@@ -1347,6 +1430,37 @@ class Pannello(NSObject):
             return
         self._spostata = True
 
+    # -- il clic fuori ---------------------------------------------------------
+    @objc.python_method
+    def _spia_clic(self, accesa: bool):
+        """Un clic in qualsiasi altro punto dello schermo fa sparire la barra.
+
+        Ha preso il posto del ✕ e del ⊖: chiudere una cosa che se ne va da sola
+        non deve costare la mira su un bersaglio da 16 punti.
+
+        🔴 `addGlobalMonitorForEventsMatchingMask_` vede SOLO gli eventi diretti
+        alle ALTRE applicazioni: i clic dentro la barra, sul suo testo, sui suoi
+        bottoni e sull'icona nella barra dei menu non passano di qui e non la
+        chiudono. È esattamente ciò che serve, e viene gratis.
+
+        E per il mouse **non chiede nessun permesso** — è solo per i tasti che
+        macOS pretende l'Accessibilità. Qui non si torna nel buco di pynput.
+
+        Il guardiano vive solo mentre la barra è a video: acceso in `apri`,
+        spento in `chiudi`. Lasciarlo lì per sempre farebbe attraversare Python
+        da ogni clic della giornata."""
+        if accesa == (self._spia is not None):
+            return
+        if not accesa:
+            NSEvent.removeMonitor_(self._spia)
+            self._spia = None
+            return
+        self._spia = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
+            NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown
+            | NSEventMaskOtherMouseDown,
+            lambda _e: self.chiudi(),
+        )
+
     @objc.python_method
     def apri(self, testo: str | None = None):
         # "Comparsa" è il passaggio da nascosta a visibile, e non coincide con
@@ -1363,6 +1477,7 @@ class Pannello(NSObject):
         if testo is not None:
             self.imposta_testo(testo)
         self._posa(comparsa)
+        self._spia_clic(True)
         # Solo alla comparsa vera: `apri()` viene chiamata anche su una barra
         # già aperta, a ogni fine dettatura — lì non c'è niente da far nascere.
         if not comparsa or not self._animato():
@@ -1390,7 +1505,8 @@ class Pannello(NSObject):
             if mio != self._giro:
                 return                   # tagliato da una chiusura: lascia stare
             self._volo = None
-            # il frame SALVATO, non il ricalcolo: stessa deriva del risucchio
+            # il frame SALVATO, non il ricalcolo: la stessa deriva del mezzo
+            # punto spiegata in `_spegni`
             self.finestra.setFrame_display_(pieno, False)
             o = self.finestra.frame().origin
             self._atteso = (round(o.x), round(o.y))
@@ -1418,39 +1534,31 @@ class Pannello(NSObject):
 
     @objc.python_method
     def chiudi(self):
-        """La barra si accartoccia in una goccia sul suo bordo alto e sparisce.
+        """La barra si dissolve dov'è: stessa posizione, stessa misura, sparisce.
 
-        È l'unica porta di chiusura: ci passano il segno ⊖, il ✕ dell'errore,
-        Esc, il clic sull'icona e l'errore che si ritira da solo."""
+        È l'unica porta di chiusura: ci passano Esc, il clic sull'icona nella
+        barra dei menu, il clic da qualsiasi altra parte (`_spia_clic`) e
+        l'errore che si ritira da solo."""
         if self.finestra is None:
             return
         if self._volo == "chiude":
             return                       # già in volo: il battito non lo rilancia
+        self._battito(False)
+        self._spia_clic(False)
+        if self._volo == "apre":
+            # stava ancora entrando: si congela lì e si va via da dove siamo,
+            # invece di lasciare l'apertura atterrare sotto la dissolvenza
+            self._taglia_volo()
         pieno = self.finestra.frame()
         if not self.finestra.isVisible() or not self._animato():
             self.finestra.orderOut_(None)
+            self.finestra.setAlphaValue_(1.0)
             return
-        goccia = self._goccia(pieno)
         self._volo = "chiude"
         self._giro += 1
         mio = self._giro
         self._animazioni += 1            # cintura per il cancello di finestraMossa_
-        self._atteso = (round(goccia.origin.x), round(goccia.origin.y))
         self._ferma_alone()
-        # 🔴 l'ombra è calcolata sul RETTANGOLO della finestra: in volo si
-        # vedrebbe un alone squadrato attorno alla capsula. Ricalcolarla a ogni
-        # fotogramma non basta, spegnerla sì.
-        self.finestra.setHasShadow_(False)
-        self.finestra.invalidateShadow()
-
-        # il contenuto se ne va nella prima metà del volo: quando la capsula è
-        # già stretta non c'è più niente dentro da schiacciare
-        NSAnimationContext.beginGrouping()
-        NSAnimationContext.currentContext().setDuration_(DURATA_SPARIZIONE)
-        for v in self._contenuti():
-            if not v.isHidden():
-                v.animator().setAlphaValue_(0.0)
-        NSAnimationContext.endGrouping()
 
         def fine():
             # il decremento PRIMA del controllo sul token: _taglia_volo non
@@ -1463,12 +1571,14 @@ class Pannello(NSObject):
 
         NSAnimationContext.beginGrouping()
         ctx = NSAnimationContext.currentContext()
-        ctx.setDuration_(DURATA_RISUCCHIO)
-        if CURVA_RISUCCHIO is not None:
-            ctx.setTimingFunction_(CURVA_RISUCCHIO)
+        ctx.setDuration_(DURATA_DISSOLVENZA)
+        if CURVA_USCITA is not None:
+            ctx.setTimingFunction_(CURVA_USCITA)
         ctx.setCompletionHandler_(fine)
-        self._pelle(GOCCIA_L, GOCCIA_A, True)
-        self.finestra.animator().setFrame_display_(goccia, True)
+        # L'ombra svanisce insieme al vetro perché è l'ombra DELLA finestra e
+        # segue la sua opacità: qui non c'è niente da spegnere a mano — la barra
+        # non cambia sagoma, quindi non c'è nessun alone squadrato da nascondere.
+        self.finestra.animator().setAlphaValue_(0.0)
         NSAnimationContext.endGrouping()
 
     @objc.python_method
@@ -1489,6 +1599,9 @@ class Pannello(NSObject):
         🔴 E va fatto DOPO orderOut_: a finestra nascosta `_ridisegna` non anima,
         quindi il frame secco tiene."""
         self.finestra.orderOut_(None)
+        # la dissolvenza l'ha portata a zero: da nascosta si rimette piena, o
+        # riaprirebbe invisibile
+        self.finestra.setAlphaValue_(1.0)
         self.finestra.setFrame_display_(pieno, False)
         o = self.finestra.frame().origin
         self._atteso = (round(o.x), round(o.y))
@@ -1524,6 +1637,10 @@ class Pannello(NSObject):
         NSAnimationContext.currentContext().setDuration_(0.0)
         self._pelle(pelle.size.width, pelle.size.height, True)
         self.finestra.animator().setFrame_display_(ora, True)
+        # anche l'opacità: se stavamo dissolvendo, la barra è a mezz'aria fra
+        # visibile e trasparente — e un `setAlphaValue_` secco verrebbe
+        # inghiottito dall'animazione in corso esattamente come il frame
+        self.finestra.animator().setAlphaValue_(1.0)
         NSAnimationContext.endGrouping()
         self.finestra.setHasShadow_(True)
         for v in self._contenuti():
@@ -1578,6 +1695,43 @@ class Pannello(NSObject):
         if self.finestra is None or not self.alone.avanza():
             self._ferma_alone()
 
+    # -- i 60 fotogrammi al secondo della registrazione -----------------------
+    @objc.python_method
+    def _battito(self, acceso: bool):
+        """Accende (o spegne) il motorino dell'onda.
+
+        Il battito dell'app va a 10 Hz: basta per un cronometro, non per delle
+        linee che respirano — a dieci fotogrammi si vedono gli scatti. Mentre
+        registra ci pensa questo timer, e si spegne appena la barra cambia
+        forma o sparisce: nessun fotogramma disegnato per nessuno.
+
+        In common modes come quello dell'anello: in default mode si
+        congelerebbe appena macOS entra in un tracking loop (un menu aperto, la
+        barra trascinata) e l'onda resterebbe di sasso a metà frase."""
+        if acceso == (self._t_onda is not None):
+            return
+        if not acceso:
+            self._t_onda.invalidate()
+            self._t_onda = None
+            self.onda.azzera()
+            self.b_azione.setAlphaValue_(1.0)   # il respiro del REC finisce qui
+            return
+        t = NSTimer.timerWithTimeInterval_repeats_block_(
+            ONDA_FPS, True, lambda _t: self._fotogramma()
+        )
+        NSRunLoop.currentRunLoop().addTimer_forMode_(t, NSRunLoopCommonModes)
+        self._t_onda = t
+
+    @objc.python_method
+    def _fotogramma(self):
+        if self.finestra is None:
+            return
+        self.onda.battito()
+        # il punto rosso respira sullo stesso orologio dell'onda: due movimenti
+        # scollegati sulla stessa barra si leggono come un difetto
+        q = 0.5 + 0.5 * math.sin(2 * math.pi * time.monotonic() / REC_RESPIRO)
+        self.b_azione.setAlphaValue_(REC_FONDO + (1.0 - REC_FONDO) * q)
+
     @objc.python_method
     def _ferma_alone(self):
         if self._t_alone is not None:
@@ -1601,14 +1755,6 @@ class Pannello(NSObject):
     def premi_(self, _s):
         if self._azione_attiva:
             self.app.dal_bottone()
-
-    def chiudiClic_(self, _s):
-        self.chiudi()
-
-    def riduciClic_(self, _s):
-        # stessa porta del ✕, del clic sull'icona e dell'errore che scade: così
-        # il risucchio lo ereditano tutte e quattro le strade, non solo questa
-        self.chiudi()
 
     def copia_(self, _s):
         self.app.copia_dal_pannello()

@@ -21,6 +21,7 @@ import sys
 import tempfile
 import threading
 import time
+import unicodedata
 from datetime import datetime
 from pathlib import Path
 
@@ -36,16 +37,21 @@ from AppKit import (
     NSEventModifierFlagControl,
     NSEventTypeRightMouseUp,
     NSMakePoint,
+    NSPasteboard,
+    NSPasteboardTypeString,
 )
 from Foundation import NSObject
+from PyObjCTools import AppHelper
 import objc
 
 from pannello import (
     ATTESA,
     ELABORA,
     ERRORI,
+    ERR_CHIAVE,
     ERR_CORTO,
     ERR_GENERICO,
+    ERR_MIC,
     ERR_NIENTE,
     ERR_VOCE,
     GRADI_MATITA,
@@ -337,8 +343,66 @@ class Groq:
 
 
 # ---------------------------------------------------------------------- utilità
+# I segni che nessuno ha chiesto. Li mette l'LLM della pulitura (virgolette
+# curve, trattini lunghi, spazi «stretti» invisibili) e finiscono in un prompt o
+# in un terminale, dove non significano niente e rompono le ricerche.
+# 🔴 Le lettere accentate NON si toccano: `perché` deve restare `perché`. Quello
+# non era mai stato un problema di caratteri strani (vedi `negli_appunti`).
+_SEGNI_STRANI = {
+    # spazi che sembrano spazi ma non lo sono
+    " ": " ", " ": " ", " ": " ", " ": " ", " ": " ",
+    # segni a larghezza zero: invisibili anche a chi li cerca
+    "⁠": "", "﻿": "", "​": "", "‌": "", "‍": "",
+    # virgolette e apostrofi tipografici → quelli della tastiera
+    "‘": "'", "’": "'", "‚": "'", "‛": "'", "′": "'",
+    "“": '"', "”": '"', "„": '"', "‟": '"', "″": '"',
+    "«": '"', "»": '"',
+    # trattini lunghi → il trattino normale
+    "‐": "-", "‑": "-", "‒": "-", "–": "-", "—": "-",
+    "―": "-", "−": "-",
+    "…": "...",
+}
+_TRADUZIONE = str.maketrans(_SEGNI_STRANI)
+
+
+def ripulisci_segni(testo: str) -> str:
+    """Il testo come lo si scriverebbe da tastiera, accenti compresi.
+
+    NFC prima di tutto: macOS scrive spesso le lettere accentate in due pezzi
+    (`e` + accento). Sullo schermo sono identiche, ma sono due caratteri — e
+    tagliate a metà da una ricerca o da un troncamento diventano illeggibili.
+    """
+    return unicodedata.normalize("NFC", testo).translate(_TRADUZIONE)
+
+
+def _scrivi_appunti(testo: str) -> None:
+    pb = NSPasteboard.generalPasteboard()
+    pb.clearContents()
+    pb.setString_forType_(testo, NSPasteboardTypeString)
+
+
 def negli_appunti(testo: str) -> None:
-    subprocess.run(["pbcopy"], input=testo.encode("utf-8"), check=True)
+    """Il testo negli appunti, con gli accenti al loro posto.
+
+    🔴 QUI stava il bug dei `perch√©`. Prima si passava da `pbcopy`, che NON
+    riceve testo: riceve byte, e li interpreta con l'encoding dell'ambiente. Un
+    `.app` lanciato dal Finder o da un LaunchAgent non eredita `LANG` da nessuna
+    shell, quindi CoreFoundation ripiega su MacRoman
+    (`__CF_USER_TEXT_ENCODING=0x1F5:0x0:0x0`, misurato sul processo il 12/9):
+    i byte UTF-8 di `perché` letti come MacRoman diventano `perch√©`, `più` →
+    `pi√π`, le virgolette curve → `‚Äú`. La barra mostrava il testo giusto e
+    l'incolla no, perché in mezzo c'era un cambio di alfabeto.
+    NSPasteboard prende una STRINGA: nessun encoding di mezzo, niente da
+    sbagliare. E in più togliamo un `subprocess` dal thread principale — un
+    fork da un'app AppKit è un altro modo di piantarsi.
+
+    Si scrive dal thread principale: `_elabora` gira in un thread suo, e
+    NSPasteboard non è dichiarata thread-safe.
+    """
+    if threading.current_thread() is threading.main_thread():
+        _scrivi_appunti(testo)
+    else:
+        AppHelper.callAfter(_scrivi_appunti, testo)
 
 
 def _log(riga: str) -> None:
@@ -356,6 +420,95 @@ def _log(riga: str) -> None:
             f.write(f"{datetime.now():%Y-%m-%d %H:%M:%S}  {riga}\n")
     except OSError:
         pass
+
+
+APERTURA_MAX = 3.0     # oltre, il microfono non sta aprendo: è impiccato
+
+
+class Microfono:
+    """CoreAudio fuori dal thread principale, e la chiusura fuori da tutto.
+
+    🔴 IL BLOCCO CHE REDA HA VISTO — la rotellina colorata alla seconda
+    registrazione, l'app che non si chiude più e il force quit. Non era il GIL,
+    e non era il nostro codice: è un abbraccio mortale dentro PortAudio+CoreAudio,
+    fotografato con `sample` il 12/9 alle 13:47.
+
+        thread che chiude : Pa_AbortStream → AudioDeviceStop → HALB_Mutex::Lock ⏳
+        thread audio      : startStopCallback (di PortAudio) → AudioUnitGetProperty
+                            → std::recursive_mutex::lock ⏳
+
+    Nessuna riga di Python nei due stack: uno aspetta l'altro, per sempre.
+    Succede ogni tanto (12 giri isolati non l'hanno riprodotto, l'app viva sì),
+    e finché PortAudio è il 19.7 non si può impedire. Si può però decidere CHI
+    resta appeso quando succede — ed è tutto quello che conta:
+
+    1. **La chiusura va in un thread usa-e-getta.** Prima stava in coda con
+       tutto il resto: quando si è impiccata, ogni accensione successiva è
+       rimasta dietro di lei e ⌘S non registrava più niente, in silenzio
+       (diario del 12/9: tre «registro…» senza un solo «microfono aperto»).
+       Adesso a restare appeso è un thread che non serve più a nessuno.
+    2. **CoreAudio non lo tocca mai il thread principale.** Se si impicca lui,
+       l'app diventa la rotellina colorata: è la differenza fra un microfono
+       che non riparte e un force quit.
+    3. **Se anche l'apertura si impicca, l'app lo DICE** (APERTURA_MAX): meglio
+       un avviso in faccia che parlare a vuoto per un minuto.
+
+    Un cadavere di stream continua a mandare buffer: li scarta il numero di
+    giro in `_arriva_audio`, che serve esattamente a questo.
+    """
+
+    def __init__(self):
+        self._ordini: queue.Queue = queue.Queue()
+        self._stream = None
+        threading.Thread(target=self._servizio, daemon=True,
+                         name="microfono").start()
+
+    def accendi(self, su_dati, pronto, fallito) -> None:
+        self._ordini.put(("accendi", su_dati, pronto, fallito))
+
+    def spegni(self) -> None:
+        self._ordini.put(("spegni", None, None, None))
+
+    def _servizio(self) -> None:
+        while True:
+            azione, su_dati, pronto, fallito = self._ordini.get()
+            try:
+                self._manda_a_morire()
+                if azione != "accendi":
+                    continue
+                t0 = time.time()
+                s = sd.InputStream(samplerate=FREQUENZA, channels=1,
+                                   dtype="int16", callback=su_dati)
+                s.start()
+                self._stream = s
+                _log(f"microfono aperto in {time.time() - t0:.2f}s")
+                pronto()
+            except Exception as e:
+                _log(f"microfono: {e}")
+                if azione == "accendi":
+                    fallito()
+
+    def _manda_a_morire(self) -> None:
+        """Lo stream vecchio se ne va per conto suo, e non lo aspetta nessuno.
+
+        abort() e non stop(): stop aspetta che il buffer si svuoti, e per
+        svuotarlo serve il callback. abort() chiude di netto — quando ci
+        riesce (vedi il deadlock qui sopra)."""
+        s, self._stream = self._stream, None
+        if s is None:
+            return
+
+        def muori():
+            t0 = time.time()
+            for chiudi in (s.abort, s.close):
+                try:
+                    chiudi(ignore_errors=True)
+                except Exception as e:
+                    _log(f"microfono, chiusura: {e}")
+            if (t := time.time() - t0) > 1.0:
+                _log(f"microfono: chiuso in {t:.1f}s (PortAudio si è impuntato)")
+
+        threading.Thread(target=muori, daemon=True, name="mic-chiude").start()
 
 
 def scrivi_storico(grezzo: str, pulito: str, modo: str, secondi: float) -> None:
@@ -431,7 +584,10 @@ class App(rumps.App):
 
         self.registrando = False
         self._pezzi: list = []
-        self._stream: sd.InputStream | None = None
+        self.mic = Microfono()
+        self._giro_reg = 0        # a quale registrazione appartiene l'audio che arriva
+        self._picco = 0.0         # il volume più alto da quando la barra ha guardato
+        self._mic_chiesto = 0.0   # quando abbiamo chiesto il microfono (0 = non lo aspettiamo)
         self._inizio = 0.0
         self._ultimo = ""
         self._eventi: queue.Queue = queue.Queue()
@@ -633,7 +789,9 @@ class App(rumps.App):
 
     def copia_dal_pannello(self):
         """Copia quello che c'è nel pannello ADESSO: se l'hai corretto, vale la correzione."""
-        testo = self._pannello.testo_corrente()
+        # ripulito anche qui: nel campo si può incollare, e quello che si
+        # incolla può portarsi dietro i segni di dove veniva
+        testo = ripulisci_segni(self._pannello.testo_corrente())
         if testo.strip():
             negli_appunti(testo)
             self._ultimo = testo
@@ -670,6 +828,17 @@ class App(rumps.App):
                 self._alterna()
             elif isinstance(ev, tuple) and ev[0] == "anteprima":
                 anteprima_nuova = ev[1]
+            elif isinstance(ev, tuple) and ev[0] == "microfono":
+                # il microfono è vivo davvero: il cronometro riparte da adesso,
+                # così non conta i decimi che CoreAudio ci ha messo ad aprirsi
+                if ev[1] == self._giro_reg and self.registrando:
+                    self._inizio = self._ultimo_suono = time.time()
+                    self._mic_chiesto = 0.0
+            elif isinstance(ev, tuple) and ev[0] == "mic-rotto":
+                # non si è aperto: la registrazione va SPENTA, o il cronometro
+                # continuerebbe a correre su un microfono che non c'è
+                if ev[1] == self._giro_reg and self.registrando:
+                    self._niente_microfono()
             elif isinstance(ev, tuple):
                 self._stato, self._etichetta = ev[0], ev[1]
                 if ev[1] in ERRORI:
@@ -680,6 +849,16 @@ class App(rumps.App):
                 if len(ev) > 2:
                     testo_nuovo = ev[2]
 
+        # 🔴 Il microfono non ha risposto né sì né no. Vuol dire che PortAudio
+        # si è impiccato (vedi Microfono): la registrazione va spenta e detto,
+        # o Reda parlerebbe per un minuto davanti a un cronometro che scorre
+        # sopra il nulla — che è quasi peggio dell'app piantata.
+        if (self._mic_chiesto and self.registrando
+                and time.time() - self._mic_chiesto > APERTURA_MAX):
+            _log("microfono: nessuna risposta, lo do per perso")
+            self._niente_microfono()
+
+        livello = 0.0
         if self.registrando:
             secondi = int(time.time() - self._inizio)
             orologio = f"{secondi // 60}:{secondi % 60:02d}"
@@ -688,6 +867,9 @@ class App(rumps.App):
             self._mostra_icona(ICONE[REGISTRA])
             self.title = orologio
             self._etichetta = f"{orologio}   ·   premi di nuovo per fermare"
+            # il picco raccolto in questo decimo di secondo, e si riparte da
+            # zero: all'onda serve il colpo di voce più forte, non l'ultimo
+            livello, self._picco = self._picco, 0.0
             if secondi >= DURATA_MAX:
                 self._alterna()
         else:
@@ -733,18 +915,28 @@ class App(rumps.App):
             self._fine_errore = 0.0
             self._barra_per_errore = False
 
-        if anteprima_nuova is not None:
-            p = self._crea_pannello()
-            if not p.e_aperto():
-                p.apri()
-            p.mostra_anteprima(self._testo_fisso, anteprima_nuova)
+        # 🔴 L'anteprima NON riapre più la barra. Prima era l'unica cosa che
+        # l'apriva durante una dettatura, ed è per questo che sembrava arrivare
+        # con dieci secondi di ritardo; ora la apre `_parti`, all'istante. E se
+        # Reda l'ha fatta sparire cliccando altrove, riaprirgliela in faccia a
+        # metà frase sarebbe il contrario di quello che ha chiesto.
+        if anteprima_nuova is not None and self._pannello is not None:
+            self._pannello.mostra_anteprima(self._testo_fisso, anteprima_nuova)
 
         if testo_nuovo is not None:
             p = self._crea_pannello()
             p.apri(testo_nuovo)            # a fine dettatura il testo si vede subito
 
         if self._pannello is not None and self._pannello.e_aperto():
-            self._pannello.aggiorna(self._stato, self._etichetta, self._livello)
+            self._pannello.aggiorna(self._stato, self._etichetta, livello)
+
+    def _niente_microfono(self):
+        """Il microfono non c'è: si smette di fingere di registrare."""
+        self.registrando = False
+        self._ciclo_vivo = False
+        self._mic_chiesto = 0.0
+        self._pezzi = []
+        self._segnala_errore(ERR_MIC)
 
     # -- registrazione --------------------------------------------------------
     def _alterna(self):
@@ -763,63 +955,67 @@ class App(rumps.App):
 
     def _parti(self):
         if not self.groq.chiave:
-            rumps.alert(
-                "Manca la chiave Groq",
-                f"Apri {ENV} e scrivi:\n\nGROQ_API_KEY=gsk_...\n\n"
-                "La generi gratis su console.groq.com/keys",
-            )
+            # niente NSAlert: vedi ERR_CHIAVE in pannello.py
+            self._segnala_errore(ERR_CHIAVE)
             return
         self._pezzi = []
         self._livello = 0.0
-        try:
-            self._stream = sd.InputStream(
-                samplerate=FREQUENZA, channels=1, dtype="int16",
-                callback=self._arriva_audio,
-            )
-            self._stream.start()
-        except Exception as e:
-            rumps.alert("Microfono non disponibile", str(e))
-            return
+        self._picco = 0.0
         self._inizio = time.time()
         self._ultimo_suono = time.time()
         self.registrando = True
         self._stato = REGISTRA
-        _log("registro…")
-        # quello che c'è già nella finestra resta fermo: l'anteprima gli va in coda
+        self._etichetta = "0:00   ·   premi di nuovo per fermare"
+        # quello che c'è già nella finestra resta fermo: l'anteprima gli va in
+        # coda. Si legge PRIMA di aprire la barra, o si leggerebbe il campo
+        # appena riaperto invece di quello che c'era.
         if self._pannello is not None and self._pannello.e_aperto():
             self._testo_fisso = self._pannello.testo_corrente()
         else:
             self._testo_fisso = self._ultimo
         self._anteprima = ""
+
+        # 🔴 LA BARRA SI APRE QUI, prima di toccare il microfono. Fino al 12/9
+        # non la apriva nessuno: compariva solo quando tornava il PRIMO pezzo di
+        # anteprima da Whisper — cioè dopo 1,3-5 secondi di parlato più il giro
+        # di rete. Reda contava «dieci secondi prima che appaia» e aveva ragione:
+        # premeva ⌘S e non succedeva niente. Il microfono, misurato, ci mette
+        # 0,39 s: non era lui.
+        p = self._crea_pannello()
+        p.apri()
+        p.aggiorna(self._stato, self._etichetta, 0.0)
+
+        self._giro_reg += 1
+        giro = self._giro_reg
+        self._mic_chiesto = time.time()
+        self.mic.accendi(
+            lambda dati, *_: self._arriva_audio(giro, dati),
+            lambda: self._eventi.put(("microfono", giro)),
+            lambda: self._eventi.put(("mic-rotto", giro)),
+        )
+        _log("registro…")
         if self.m_live.state:
             self._ciclo_vivo = True
             threading.Thread(target=self._ciclo_anteprima, daemon=True).start()
 
-    def _arriva_audio(self, dati, *_):
+    def _arriva_audio(self, giro, dati):
+        """Sul thread audio di CoreAudio, ~100 volte al secondo.
+
+        Il `giro` è la registrazione a cui questo stream appartiene: un buffer
+        che arriva in ritardo da quello di prima (lo stream si chiude mentre il
+        callback è già partito) finirebbe in coda alla dettatura nuova."""
+        if giro != self._giro_reg or not self.registrando:
+            return
         self._pezzi.append(dati.copy())
         # RMS normalizzato: il parlato normale sta sotto i 4000 su int16
         forza = float(np.sqrt(np.mean(dati.astype(np.float32) ** 2)))
         self._livello = min(1.0, forza / 4000.0)
+        # il picco dall'ultima volta che la barra ha guardato: lei legge 10
+        # volte al secondo, qui ne arrivano ~100 — senza questo, nove colpi di
+        # voce su dieci non arriverebbero mai all'onda
+        self._picco = max(self._picco, self._livello)
         if self._livello > SILENZIO:
             self._ultimo_suono = time.time()
-
-    @staticmethod
-    def _spegni_stream(stream):
-        """Fuori dal thread principale, sempre.
-
-        stop() aspetta che il callback audio termini, e il callback aspetta il
-        GIL: se a chiamarlo è il thread che tiene il GIL, CoreAudio non torna
-        più indietro e l'app si pianta senza possibilità di chiuderla.
-        abort() chiude di netto, senza aspettare di svuotare il buffer.
-        """
-        try:
-            stream.abort(ignore_errors=True)
-        except Exception:
-            pass
-        try:
-            stream.close(ignore_errors=True)
-        except Exception:
-            pass
 
     def _ciclo_anteprima(self):
         """Manda a Whisper i pezzi già pronunciati, mentre continui a parlare."""
@@ -869,10 +1065,12 @@ class App(rumps.App):
     def _ferma(self):
         self._ciclo_vivo = False
         self.registrando = False
-        self._livello = 0.0
-        stream, self._stream = self._stream, None
-        if stream is not None:
-            threading.Thread(target=self._spegni_stream, args=(stream,), daemon=True).start()
+        self._livello = self._picco = 0.0
+        self._mic_chiesto = 0.0
+        # il giro avanza PRIMA di spegnere: i buffer già in volo dal thread
+        # audio trovano un numero diverso e si buttano da soli
+        self._giro_reg += 1
+        self.mic.spegni()
         secondi = time.time() - self._inizio
         pezzi, self._pezzi = self._pezzi, []
         if not pezzi or secondi < 0.6:
@@ -908,6 +1106,19 @@ class App(rumps.App):
                 testo = applica_correzioni(
                     self.groq.ripulisci(grezzo, self.modo, self.vocabolario), self.correzioni
                 )
+            # per ultimo, sempre: l'LLM secondo il suo gusto tipografico infila
+            # virgolette curve, trattini lunghi e spazi «stretti» invisibili.
+            # Qui il testo torna quello che si scriverebbe da tastiera — e da
+            # qui in poi barra, appunti e storico vedono le STESSE lettere.
+            testo = ripulisci_segni(testo)
+            if not testo.strip():
+                # 🔴 L'LLM può restituire il vuoto (è successo: «0 parole negli
+                # appunti» nel diario del 12/9). Scriverlo negli appunti
+                # CANCELLA quello che Reda aveva copiato prima, e la dettatura
+                # persa diventa anche roba altrui persa.
+                _log(f"avviso: {ERR_NIENTE} (l'LLM ha reso il vuoto, {secondi:.0f}s)")
+                self._eventi.put((PRONTO, ERR_NIENTE))
+                return
 
             # le dettature si accumulano: la seconda va in coda alla prima
             in_coda = bool(precedente.strip())
