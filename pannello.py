@@ -37,7 +37,6 @@ import objc
 from AppKit import (
     NSAffineTransform,
     NSAnimationContext,
-    NSApp,
     NSAppearance,
     NSAppearanceNameVibrantLight,
     NSAttributedString,
@@ -90,22 +89,40 @@ from Foundation import (NSNotificationCenter, NSObject, NSPointInRect,
 # --- gli stati che l'app ci manda -------------------------------------------
 PRONTO, REGISTRA, ELABORA = "pronto", "registra", "elabora"
 
+
+class Errore(str):
+    """Un'etichetta che è un errore: la barra la dipinge d'arancione.
+
+    È una stringa a tutti gli effetti — si confronta, si scrive, si mostra —
+    ma porta con sé il fatto di essere un errore. Prima gli errori erano un
+    elenco fisso di frasi, e un errore col nome del microfono dentro («"iPhone"
+    non manda suono») non sarebbe mai diventato arancione."""
+
+    __slots__ = ()
+
+
+def e_errore(etichetta) -> bool:
+    return isinstance(etichetta, Errore)
+
+
 # Le etichette che valgono un errore. Stanno qui e non in dettatura.py perché è
-# la barra a doverle riconoscere per diventare arancione: tenerle scritte due
-# volte significherebbe che al primo ritocco l'errore torna a sembrare un
-# messaggio qualsiasi.
-ERR_CORTO = "troppo corto: riprova"
-ERR_VOCE = "non ho sentito la voce"
-ERR_NIENTE = "non ho sentito niente"
-ERR_GENERICO = "errore: guarda il Terminale"
+# la barra a doverle riconoscere per diventare arancione.
+ERR_CORTO = Errore("troppo corto: riprova")
+ERR_VOCE = Errore("non ho sentito la voce")
+ERR_NIENTE = Errore("non ho sentito niente")
+ERR_GENERICO = Errore("errore: il dettaglio è in dettatura.log")
 # 🔴 Questi due prima erano `rumps.alert`, cioè un NSAlert modale. In un'app
 # senza icona nel Dock un pannello modale può nascere DIETRO a tutto: non lo
 # vedi, il run loop entra in modal mode, e da fuori l'app sembra piantata —
 # rotellina compresa. Un avviso dentro la barra si legge e non blocca niente.
-ERR_MIC = "microfono non disponibile"
-ERR_CHIAVE = "manca la chiave Groq nel .env"
-ERRORI = frozenset({ERR_CORTO, ERR_VOCE, ERR_NIENTE, ERR_GENERICO,
-                    ERR_MIC, ERR_CHIAVE})
+ERR_MIC = Errore("microfono non disponibile")
+ERR_CHIAVE = Errore("manca la chiave Groq nel .env")
+ERR_CHIAVE_RIFIUTATA = Errore("Groq rifiuta la chiave: controlla il .env")
+ERR_PERMESSO = Errore("manca il permesso del Microfono")
+# la rete: la dettatura NON è persa, sta in da-trascrivere/ e il menu la riprova
+ERR_RETE = Errore("Groq non risponde: dettatura messa da parte")
+ERRORI = frozenset({ERR_CORTO, ERR_VOCE, ERR_NIENTE, ERR_GENERICO, ERR_MIC,
+                    ERR_CHIAVE, ERR_CHIAVE_RIFIUTATA, ERR_PERMESSO, ERR_RETE})
 
 # Quando premi la scorciatoia mentre sta ancora trascrivendo: non parte una
 # seconda registrazione, e la barra lo dice invece di sembrare rotta.
@@ -155,7 +172,15 @@ BARRE, LARGA_BARRA, GAP_BARRA = 21, 3.0, 3.0
 ONDA_L = BARRE * LARGA_BARRA + (BARRE - 1) * GAP_BARRA
 ONDA_A = 22
 X_ONDA, X_CRONO, L_CRONO = 48, 182, 44
-NOCC_REGISTRA_L = 248        # misurata sul prototipo, approvata il 24/8
+# Il bottone ▾ che sceglie il microfono (chiesto da Reda l'11/10). Sta in fondo
+# alla nocciola, nella curva della capsula: la barra dei menu di Reda si
+# nasconde da sola e Warp è a tutto schermo, quindi un menu lassù non lo trova
+# nessuno — la barra invece compare a ogni ⌘S, proprio quando serve.
+LATO_SCELTA = 22
+MARGINE_SCELTA = 10          # dal bordo destro: centrato nella curva (raggio 22)
+CODA_SCELTA = LATO_SCELTA + MARGINE_SCELTA
+# 248 sul prototipo approvato il 24/8, + il bottone del microfono dopo il cronometro
+NOCC_REGISTRA_L = X_CRONO + L_CRONO + 2 + CODA_SCELTA
 
 # --- come respira l'onda -----------------------------------------------------
 # Non è più un istogramma che scorre (le ultime 25 misure, la più recente a
@@ -383,8 +408,25 @@ class VistaTrascina(NSView):
     trasparente e sopra ci sta il vetro, che intercetta il clic. Qui il
     trascinamento lo chiediamo noi, esplicitamente."""
 
+    def acceptsFirstMouse_(self, _evento):
+        # la barra non prende più la tastiera da sola (vedi `_mostra`): senza
+        # questo il primo clic servirebbe solo a «svegliarla», e trascinarla
+        # vorrebbe due tentativi
+        return True
+
     def mouseDown_(self, evento):
         self.window().performWindowDragWithEvent_(evento)
+
+
+class Bottone(NSButton):
+    """Un bottone che risponde al PRIMO clic.
+
+    La barra si mostra senza diventare la finestra attiva (vedi `_mostra`), e
+    un NSButton qualsiasi in una finestra non attiva spende il primo clic per
+    attivarla: Copia o Ferma andrebbero premuti due volte."""
+
+    def acceptsFirstMouse_(self, _evento):
+        return True
 
 
 class VistaVetro(VistaTrascina):
@@ -650,16 +692,25 @@ class Pannello(NSObject):
         self._giro = 0
         return self
 
+    @objc.python_method
+    def prepara(self):
+        """Costruisce la barra senza mostrarla: la prima ⌘S dopo l'avvio
+        pagava la costruzione del vetro (366 ms misurati l'11/10, contro i
+        pochi ms delle volte dopo)."""
+        if self.finestra is None:
+            self._costruisci()
+
     # -- costruzione ----------------------------------------------------------
     @objc.python_method
-    def _icona(self, nome, punti, azione=None, aiuto=None, lato=LATO_ICONA):
+    def _icona(self, nome, punti, azione=None, aiuto=None, lato=LATO_ICONA,
+               peso=NSFontWeightRegular):
         """Un'icona dentro una casella FISSA.
 
         Le SF Symbols hanno misure tutte diverse (`eraser` 21x19, `doc.on.doc`
         16x18, `checkmark.circle.fill` 15x15): in una casella elastica il
         passaggio Copia → Copiato farebbe saltare il layout di 1-3 px."""
-        b = NSButton.alloc().initWithFrame_(NSMakeRect(0, 0, lato, lato))
-        b.setImage_(_simbolo(nome, punti))
+        b = Bottone.alloc().initWithFrame_(NSMakeRect(0, 0, lato, lato))
+        b.setImage_(_simbolo(nome, punti, peso))
         b.setImagePosition_(NSImageOnly)
         b.setImageScaling_(NSImageScaleProportionallyDown)
         b.setBordered_(False)
@@ -734,6 +785,8 @@ class Pannello(NSObject):
         self.testo_view = NSTextView.alloc().initWithFrame_(
             NSMakeRect(0, 0, L_TESTO_MAX, TESTO_ALTO_MAX))
         self.testo_view.setEditable_(True)
+        # ⌘Z dopo una correzione a mano: di serie un NSTextView non se la ricorda
+        self.testo_view.setAllowsUndo_(True)
         self.testo_view.setRichText_(False)
         self.testo_view.setFont_(FONT_TESTO)
         self.testo_view.setTextColor_(NSColor.labelColor())
@@ -757,7 +810,13 @@ class Pannello(NSObject):
         self.b_copia = self._icona("doc.on.doc", 15, "copia:", "Copia (Invio)")
         self.b_copia.setKeyEquivalent_("\r")
         self.menu_btn = self._icona("ellipsis", 15, "apriMenu:", "Modalità e impostazioni")
-        for b in (self.b_svuota, self.b_copia, self.menu_btn):
+        # peso medio e colore del testo: a peso normale, grigio accanto al
+        # cronometro bianco, si leggeva come un difetto più che come un bottone
+        self.b_microfono = self._icona("chevron.down", 12, "sceltaMicrofono:",
+                                       "Scegli il microfono", lato=LATO_SCELTA,
+                                       peso=NSFontWeightMedium)
+        self.b_microfono.setContentTintColor_(NSColor.labelColor())
+        for b in (self.b_svuota, self.b_copia, self.menu_btn, self.b_microfono):
             self.contenuto.addSubview_(b)
 
         # Sopra i bottoni ma sotto il filo. L'ordine è tutto: sotto i bottoni
@@ -864,7 +923,7 @@ class Pannello(NSObject):
             return OCCUPATO
         if self._stato == ELABORA:
             return ELABORA
-        if self._etichetta in ERRORI:
+        if e_errore(self._etichetta):
             return ERRORE
         return DISTESA if self._testo.strip() else RIPOSO
 
@@ -898,9 +957,10 @@ class Pannello(NSObject):
         if forma == REGISTRA:
             return NOCC_REGISTRA_L, NOCC_A, 0, ""
         if forma != DISTESA:
-            # niente più coda per il ✕ dell'errore: non c'è più nessun bottone
+            # niente più coda per il ✕ dell'errore; c'è quella del microfono
             largo = _larghezza(self._messaggio(), FONT_MSG)
-            L = max(NOCC_MIN, int(X_MSG + math.ceil(largo) + MARGINE_CELL + CODA_MSG))
+            L = max(NOCC_MIN, int(X_MSG + math.ceil(largo) + MARGINE_CELL
+                                  + self._coda_messaggio(forma)))
             return L, NOCC_A, 0, ""
 
         # la distesa: la larghezza segue la riga più lunga, l'altezza il testo accodato
@@ -913,6 +973,17 @@ class Pannello(NSObject):
         blocco = h_testo + (H_NOTA if nota else 0)
         A = int(max(DIST_A, blocco + ARIA_DISTESA))
         return L, A, h_testo, nota
+
+    @objc.python_method
+    def _con_scelta(self, forma) -> bool:
+        """Il ▾ del microfono c'è dove serve: mentre parli, a riposo, e sugli
+        errori — «"iPhone" non manda suono» chiede proprio di cambiarlo. Non
+        mentre trascrive (non ascolta nessuno) né nella distesa, dove c'è •••."""
+        return forma in (REGISTRA, RIPOSO, ERRORE)
+
+    @objc.python_method
+    def _coda_messaggio(self, forma) -> float:
+        return CODA_MSG + (LATO_SCELTA if self._con_scelta(forma) else 0)
 
     # -- il layout ------------------------------------------------------------
     @objc.python_method
@@ -948,6 +1019,7 @@ class Pannello(NSObject):
             (self.b_svuota, not nocciola),
             (self.b_copia, not nocciola),
             (self.menu_btn, not nocciola),
+            (self.b_microfono, self._con_scelta(forma)),
         ):
             if not visibile:
                 v.setHidden_(True)          # chi esce sparisce e basta
@@ -1005,12 +1077,16 @@ class Pannello(NSObject):
         telaio(self.b_azione,
                NSMakeRect(X_ICONA if nocciola else 18, cy_icona, LATO_ICONA, LATO_ICONA))
 
+        if self._con_scelta(forma):
+            telaio(self.b_microfono, NSMakeRect(L - CODA_SCELTA, (NOCC_A - LATO_SCELTA) / 2.0,
+                                                LATO_SCELTA, LATO_SCELTA))
         if forma == REGISTRA:
             telaio(self.onda, NSMakeRect(X_ONDA, (NOCC_A - ONDA_A) / 2.0, ONDA_L, ONDA_A))
             telaio(self.crono, NSMakeRect(X_CRONO, (NOCC_A - 19) / 2.0, L_CRONO, 19))
         elif nocciola:
             telaio(self.messaggio,
-                   NSMakeRect(X_MSG, (NOCC_A - 20) / 2.0, L - X_MSG - CODA_MSG, 20))
+                   NSMakeRect(X_MSG, (NOCC_A - 20) / 2.0,
+                              L - X_MSG - self._coda_messaggio(forma), 20))
         else:
             largo = L - FISSO
             blocco = h_testo + (H_NOTA if nota else 0)
@@ -1225,19 +1301,6 @@ class Pannello(NSObject):
             self.testo_view.scrollRangeToVisible_((len(self._testo), 0))
 
     @objc.python_method
-    def mostra_anteprima(self, fisso: str, provvisorio: str):
-        """Mentre parli la barra è una nocciola: non si legge testo, si vedono
-        l'onda e il cronometro (ticket 02, deciso il 26/8).
-
-        I blocchi di anteprima arrivano ogni 1,3-5 secondi: mostrarli
-        allargherebbe la barra a ogni blocco — 310 → 390 → 470 punti, ognuna con
-        la sua animazione — e la barra striscerebbe di lato tutto il tempo. Il
-        testo arriva tutto insieme alla fine, quando c'è qualcosa da leggere.
-
-        Il metodo resta perché dettatura.py lo chiama: cambia cosa fa, non come
-        lo si chiama."""
-
-    @objc.python_method
     def testo_corrente(self) -> str:
         return str(self.testo_view.string()) if self.finestra is not None else ""
 
@@ -1359,7 +1422,8 @@ class Pannello(NSObject):
         farebbe arrivare una goccia scolorita invece che di vetro."""
         return (self.b_azione, self.onda, self.crono, self.messaggio,
                 self.scroll, self.conteggio,
-                self.nota, self.b_svuota, self.b_copia, self.menu_btn)
+                self.nota, self.b_svuota, self.b_copia, self.menu_btn,
+                self.b_microfono)
 
     @objc.python_method
     def _animato(self) -> bool:
@@ -1462,6 +1526,21 @@ class Pannello(NSObject):
         )
 
     @objc.python_method
+    def _mostra(self):
+        """Davanti a tutto, ma SENZA portare via la tastiera a chi la sta usando.
+
+        🔴 Fino all'11/10 qui c'erano `makeKeyAndOrderFront_` e
+        `activateIgnoringOtherApps_`: a ogni ⌘S, e di nuovo a fine dettatura,
+        Dettatura diventava l'app attiva. Il testo era negli appunti, ma ⌘V
+        finiva a lei — che non ha un campo pronto a riceverlo — e in Warp non
+        arrivava niente finché Reda non ci cliccava sopra. Adesso la barra si
+        posa davanti a tutto e Warp resta quello che riceve i tasti: ⌘V incolla
+        subito. Per correggere il testo nella barra basta un clic sopra: è un
+        pannello «non attivante», diventa lei a ricevere i tasti senza
+        strappare il primo piano a nessuno (e Invio copia, Esc chiude)."""
+        self.finestra.orderFrontRegardless()
+
+    @objc.python_method
     def apri(self, testo: str | None = None):
         # "Comparsa" è il passaggio da nascosta a visibile, e non coincide con
         # questa chiamata: a fine dettatura apri() viene invocata anche su una
@@ -1481,8 +1560,7 @@ class Pannello(NSObject):
         # Solo alla comparsa vera: `apri()` viene chiamata anche su una barra
         # già aperta, a ogni fine dettatura — lì non c'è niente da far nascere.
         if not comparsa or not self._animato():
-            self.finestra.makeKeyAndOrderFront_(None)
-            NSApp.activateIgnoringOtherApps_(True)
+            self._mostra()
             return
 
         pieno = self.finestra.frame()
@@ -1497,8 +1575,7 @@ class Pannello(NSObject):
         self._pelle(GOCCIA_L, GOCCIA_A)
         for v in self._contenuti():
             v.setAlphaValue_(0.0)
-        self.finestra.makeKeyAndOrderFront_(None)
-        NSApp.activateIgnoringOtherApps_(True)
+        self._mostra()
 
         def fine():
             self._animazioni = max(0, self._animazioni - 1)
@@ -1764,3 +1841,13 @@ class Pannello(NSObject):
 
     def apriMenu_(self, _s):
         self.app.mostra_menu()
+
+    def sceltaMicrofono_(self, _s):
+        self.app.scegli_microfono_da(self.b_microfono)
+
+    @objc.python_method
+    def imposta_microfono(self, nome: str):
+        """Il ▾ dice nel tooltip quale microfono sta ascoltando."""
+        if self.finestra is not None:
+            self.b_microfono.setToolTip_(
+                f"Microfono: {nome} — clic per cambiarlo" if nome else "Scegli il microfono")

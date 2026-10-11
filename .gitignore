@@ -3,6 +3,10 @@ __pycache__/
 .env
 storico.md
 dettatura.log
+dettatura.log.1
+.env.nuovo
+# l'audio delle dettature che Groq non ha potuto trascrivere: è la tua voce
+da-trascrivere/
 build/
 dist/
 .dettatura.lock

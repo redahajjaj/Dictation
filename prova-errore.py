@@ -15,6 +15,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import dettatura as D
 
+# il diario delle prove non è quello di Reda: ci finirebbero gli «avviso:» finti
+import tempfile  # noqa: E402
+D.LOG = Path(tempfile.mkdtemp(prefix="prova-errore-")) / "dettatura.log"
+
 esiti = []
 
 
@@ -46,32 +50,18 @@ class PannelloFinto:
 
 class AppFinta(D.App):
     """L'App vera, ma senza __init__ (che apre microfono e Groq) e senza i tre
-    punti che parlano con macOS."""
+    punti che parlano con macOS.
+
+    Lo stato lo scrive `_stato_iniziale`, lo STESSO che usa l'app vera: prima
+    qui c'era una copia a mano dei campi, e il primo campo nuovo dell'app
+    (`_tasti_morti`) l'ha rotta in silenzio."""
 
     def __init__(self):
-        import queue
-        self.cfg = {}
-        self.scorciatoia = "<cmd>+s"
-        self.tasti = "⌘S"
-        self.invito = "premi ⌘S per dettare"
-        self.modo = "pulito"
-        self.registrando = False
-        self._eventi = queue.Queue()
-        self._stato = D.PRONTO
-        self._etichetta = self.invito
-        self._livello = 0.0
-        self._fine_attesa = 0.0
-        self._etichetta_prima = self.invito
-        self._fine_errore = 0.0
-        self._errore_n = 0
-        self._errore_armato = -1
-        self._barra_per_errore = False
+        self._stato_iniziale({"DETTATURA_HOTKEY": "<cmd>+s"})
         self._icona_agganciata = True
-        self._bottone_barra = None
-        self._icona_ora = ""
+        self._prossimo_controllo = float("inf")   # niente file veri da rileggere
         self.pannello = PannelloFinto()
         self._pannello = self.pannello
-        self._testo_fisso = ""
 
     # i tre punti che toccherebbero macOS
     title = property(lambda s: "", lambda s, v: None)

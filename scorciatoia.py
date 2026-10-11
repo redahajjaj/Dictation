@@ -63,6 +63,7 @@ _TASTO_PREMUTO = 5                    # kEventHotKeyPressed
 _PARAMETRO = _fourcc("----")          # kEventParamDirectObject
 _TIPO_ID = _fourcc("hkid")            # typeEventHotKeyID
 _FIRMA = _fourcc("DETT")
+_NON_GESTITO = -9874                  # eventNotHandledErr
 
 # I bit dei modificatori come li vuole Carbon (non sono quelli di NSEvent).
 _MODIFICATORI = {
@@ -141,11 +142,13 @@ class Scorciatoie:
             evento, _PARAMETRO, _TIPO_ID, None, ctypes.sizeof(hk), None, ctypes.byref(hk)
         )
         azione = self._azioni.get(hk.id) if err == 0 and hk.signature == _FIRMA else None
-        if azione is not None:
-            try:
-                azione()
-            except Exception as e:      # un'eccezione qui dentro ucciderebbe il run loop
-                print(f"scorciatoia: l'azione ha fallito: {e}", file=sys.stderr)
+        if azione is None:
+            # non è una delle nostre: la si lascia passare a chi l'ha registrata
+            return _NON_GESTITO
+        try:
+            azione()
+        except Exception as e:          # un'eccezione qui dentro ucciderebbe il run loop
+            print(f"scorciatoia: l'azione ha fallito: {e}", file=sys.stderr)
         return 0                        # noErr: l'evento è nostro, non va oltre
 
     def registra(self, spec: str, azione) -> str | None:

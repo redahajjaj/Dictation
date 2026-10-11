@@ -2,6 +2,7 @@
 # Bundle vero: identità propria, quindi macOS chiede i permessi a "Dettatura"
 # e se li ricorda anche quando Homebrew aggiorna Python.
 import os
+import time
 
 # I file veri (vocabolario.txt, correzioni.txt) contengono i nomi di chi usa
 # l'app e git li ignora: su un clone appena fatto non esistono ancora. Si
@@ -15,9 +16,11 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[(f, ".") for f in _config],
-    # niente hiddenimports: la scorciatoia è Carbon via ctypes (scorciatoia.py),
-    # pynput non c'è più
-    hiddenimports=[],
+    # sounddevice lo importa solo il processo del microfono, dentro una
+    # funzione (microfono.figlio): l'analisi lo trova lo stesso, ma se un
+    # giorno non lo trovasse l'app partirebbe e ogni dettatura fallirebbe.
+    # La scorciatoia è Carbon via ctypes (scorciatoia.py): niente pynput.
+    hiddenimports=["sounddevice", "_sounddevice_data"],
     hookspath=[], hooksconfig={}, runtime_hooks=[],
     excludes=["tkinter", "matplotlib", "PIL", "pytest"],
     noarchive=False, optimize=0,
@@ -34,8 +37,15 @@ app = BUNDLE(
     # sotto, o lo sovrascrive e l'icona sparisce
     coll, name="Dettatura.app", icon="Dettatura.icns",
     bundle_identifier="com.reda.dettatura",
-    version="1.0",
+    version="1.1",
     info_plist={
+        # il numero della build: il diario lo scrive a ogni avvio, così si sa
+        # QUALE Dettatura girava quando è successo qualcosa (e senza, macOS
+        # scarta i rapporti di stabilità: «version is missing», 10-11/10)
+        "CFBundleVersion": time.strftime("%Y%m%d.%H%M"),
+        # App Nap rallenta i timer di un'app senza finestre a video: il battito
+        # che trasforma ⌘S in una registrazione arriverebbe in ritardo
+        "NSAppSleepDisabled": True,
         # 🔴 Niente LSUIElement: Reda vuole l'icona nel Dock, per ritrovare
         # l'app e riaprirla dopo averla chiusa. Conseguenza: compare anche in
         # ⌘Tab, e il clic sull'icona nel Dock deve fare qualcosa — ci pensa

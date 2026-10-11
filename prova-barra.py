@@ -74,6 +74,9 @@ class AppFinta:
     def mostra_menu(self):
         pass
 
+    def scegli_microfono_da(self, vista):
+        self.microfono = getattr(self, "microfono", 0) + 1
+
 
 class VistaFondo(NSView):
     def impostaTipo_(self, tipo):
@@ -152,6 +155,11 @@ def main():
     controlla("01 riposo: nocciola", A == P.NOCC_A and L >= P.NOCC_MIN, f"{L}x{A}")
     controlla("01 riposo: mic attivo", p._azione_attiva)
     controlla("01 riposo: niente testo", p.scroll.isHidden() and p.menu_btn.isHidden())
+    m = p.b_microfono.frame()
+    controlla("01 riposo: c'è il ▾ del microfono, dentro la capsula",
+              not p.b_microfono.isHidden() and m.origin.x + m.size.width <= L - 8, f"x={m.origin.x:.0f}")
+    controlla("01 riposo: il messaggio non ci passa sotto",
+              p.messaggio.frame().origin.x + p.messaggio.frame().size.width <= m.origin.x)
     scatta("01-riposo")
 
     # 02 registra
@@ -161,13 +169,19 @@ def main():
     p.aggiorna(P.REGISTRA, "0:14   ·   premi di nuovo per fermare", 0.85)
     attendi(0.35)
     L, A = misure()
-    controlla("02 registra: 248x44", (L, A) == (P.NOCC_REGISTRA_L, P.NOCC_A), f"{L}x{A}")
+    controlla(f"02 registra: {P.NOCC_REGISTRA_L}x44", (L, A) == (P.NOCC_REGISTRA_L, P.NOCC_A),
+              f"{L}x{A}")
     controlla("02 registra: cronometro", str(p.crono.stringValue()) == "0:14",
               str(p.crono.stringValue()))
     controlla("02 registra: onda a video", not p.onda.isHidden() and not p.crono.isHidden())
     controlla("02 registra: l'onda è salita", p.onda._liv > 0.6, f"{p.onda._liv:.2f}")
     controlla("02 registra: il motorino gira", p._t_onda is not None)
     controlla("02 registra: niente parole", p.messaggio.isHidden() and p.scroll.isHidden())
+    m = p.b_microfono.frame()
+    c = p.crono.frame()
+    controlla("02 registra: il ▾ sta dopo il cronometro, dentro la capsula",
+              not p.b_microfono.isHidden() and m.origin.x >= c.origin.x + c.size.width
+              and m.origin.x + m.size.width <= L - 8, f"crono fino a {c.origin.x + c.size.width:.0f}, ▾ {m.origin.x:.0f}-{m.origin.x + m.size.width:.0f}")
     scatta("02-registra")
 
     # 03 silenzio
@@ -185,6 +199,7 @@ def main():
     controlla("04 elabora: nocciola", A == P.NOCC_A, f"{L}x{A}")
     controlla("04 elabora: messaggio", str(p.messaggio.stringValue()) == "Trascrivo…")
     controlla("04 elabora: mic inerte", not p._azione_attiva)
+    controlla("04 elabora: niente ▾ (non ascolta nessuno)", p.b_microfono.isHidden())
     scatta("04-elabora")
 
     # 05 risultato
@@ -198,6 +213,7 @@ def main():
     controlla("05 risultato: icone a video",
               not p.b_svuota.isHidden() and not p.b_copia.isHidden()
               and not p.menu_btn.isHidden())
+    controlla("05 risultato: nella distesa il microfono sta nel •••", p.b_microfono.isHidden())
     controlla("05 risultato: testo nel campo", str(p.testo_view.string()) == MEDIO)
     scatta("05-risultato")
 
@@ -414,12 +430,22 @@ def main():
               and round(p.filo.frame().size.width) == round(f2.size.width),
               f"raggio {atteso}")
 
-    # l'anteprima mentre parli non scrive testo (ticket 02)
+    # mentre parli la barra è una nocciola: niente testo (ticket 02)
     p.imposta_testo("")
     p.aggiorna(P.REGISTRA, "0:05   ·   premi di nuovo per fermare", 0.5)
-    p.mostra_anteprima("", "parole che stanno arrivando")
-    controlla("anteprima: non scrive niente", str(p.testo_view.string()) == ""
+    controlla("mentre parli: nocciola senza testo", str(p.testo_view.string()) == ""
               and misure() == (P.NOCC_REGISTRA_L, P.NOCC_A))
+
+    # un errore col nome del microfono dentro è arancione come gli altri
+    p.aggiorna(P.PRONTO, P.Errore("«iPhone di prova» non manda suono"))
+    controlla("errore col nome del microfono: arancione",
+              p._forma() == P.ERRORE and p.b_azione.contentTintColor() is not None)
+    p.aggiorna(P.PRONTO, "premi ⌘S per dettare")
+
+    # la barra non porta più via la tastiera a chi la usa (11/10)
+    controlla("aprendosi non diventa la finestra attiva", not p.finestra.isKeyWindow())
+    controlla("i bottoni rispondono al primo clic",
+              p.b_copia.acceptsFirstMouse_(None) and p.b_azione.acceptsFirstMouse_(None))
 
     # i bottoni chiamano l'app
     p.imposta_testo(MEDIO)
@@ -427,6 +453,8 @@ def main():
     p.copia_(None)
     p.svuota_(None)
     p.premi_(None)
+    p.sceltaMicrofono_(None)
+    controlla("il ▾ chiede all'app l'elenco dei microfoni", getattr(finta, "microfono", 0) == 1)
     controlla("i bottoni parlano con l'app",
               (finta.copiato, finta.svuotato, finta.premuto) == (1, 1, 1),
               str((finta.copiato, finta.svuotato, finta.premuto)))

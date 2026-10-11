@@ -1,13 +1,10 @@
 #!/bin/bash
 # Ricompila il bundle e lo reinstalla in /Applications.
-# Serve solo dopo aver toccato dettatura.py o pannello.py — vocabolario,
-# correzioni e .env vivono fuori dal bundle e si modificano senza ricompilare.
+# Serve solo dopo aver toccato dettatura.py, microfono.py o pannello.py —
+# vocabolario, correzioni e .env vivono fuori dal bundle e si modificano senza
+# ricompilare (l'app li rilegge da sola).
 set -e
 cd "$(dirname "$0")"
-
-# se gira da sorgente, il lock impedirebbe al bundle nuovo di partire
-pkill -f "Dettatura.app/Contents/MacOS/Dettatura" 2>/dev/null || true
-pkill -f "dettatura.py" 2>/dev/null || true
 
 # l'icona: la rigenera solo se manca, o se lo script è più recente
 if [ ! -f Dettatura.icns ] || [ fai-icona.py -nt Dettatura.icns ]; then
@@ -15,7 +12,22 @@ if [ ! -f Dettatura.icns ] || [ fai-icona.py -nt Dettatura.icns ]; then
   ./.venv/bin/python fai-icona.py >/dev/null
 fi
 
+# PRIMA si compila, con l'app vecchia ancora accesa: se la compilazione
+# fallisce, Reda resta con un'app che funziona invece che con nessuna
 ./.venv/bin/pyinstaller --noconfirm --clean Dettatura.spec
+
+# Poi si ferma la vecchia. Va tolta a launchd: con KeepAlive, un `pkill` e
+# basta la farebbe rinascere dal bundle che stiamo per cancellare.
+launchctl bootout "gui/$UID/com.reda.dettatura" 2>/dev/null || true
+pkill -f "Dettatura.app/Contents/MacOS/Dettatura" 2>/dev/null || true
+# se gira da sorgente, il lock impedirebbe al bundle nuovo di partire
+pkill -f "dettatura.py" 2>/dev/null || true
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  pgrep -f "Dettatura.app/Contents/MacOS/Dettatura" >/dev/null || break
+  sleep 0.3
+done
+pkill -9 -f "Dettatura.app/Contents/MacOS/Dettatura" 2>/dev/null || true
+
 rm -rf /Applications/Dettatura.app
 cp -R dist/Dettatura.app /Applications/
 
@@ -42,4 +54,11 @@ rm -rf dist/Dettatura.app
 
 echo "✓ installata. Controllo:"
 /Applications/Dettatura.app/Contents/MacOS/Dettatura --check
-open -a Dettatura
+
+# si riaccende con launchd (che la riapre se muore), non con `open -a`: aperta
+# a mano girerebbe senza nessuno che la rialza
+if [ -f "$HOME/Library/LaunchAgents/com.reda.dettatura.plist" ]; then
+  ./avvio-automatico.sh
+else
+  open -a Dettatura
+fi
