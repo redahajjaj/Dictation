@@ -897,6 +897,9 @@ class App(rumps.App):
         self.mic = Microfono(comando_figlio(Path(__file__).resolve()), _log,
                              self.cfg.get("DETTATURA_MICROFONO", ""))
         rumps.events.before_quit.register(self.mic.chiudi_tutto)
+        # un'uscita voluta deve lasciare traccia quanto una morte: il 1/10
+        # nessuno ha potuto dire quale delle due fosse
+        rumps.events.before_quit.register(lambda: _log("uscita: chiusa dal menu o dal Dock"))
 
         # il menu ora è secondario: si apre col tasto destro sull'icona o dal •••
         self.m_pulito = rumps.MenuItem("Testo pulito", callback=self.scegli_modo)
