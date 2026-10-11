@@ -1,7 +1,8 @@
 # CLAUDE.md — Dettatura
 
 > App nella barra dei menu del Mac: premi **⌘S**, parli, il testo ripulito è già negli appunti.
-> Python + rumps (menu bar) + PyObjC (la barra di vetro) + Carbon via ctypes (la scorciatoia) + Groq (Whisper per la voce, un LLM per la pulitura).
+> Python + rumps (menu bar) + PyObjC (la barra di vetro) + Carbon via ctypes (la scorciatoia) +
+> **un processo a parte per il microfono** (PortAudio) + Groq (Whisper per la voce, un LLM per la pulitura).
 > Uso quotidiano di Reda: se si rompe, si ferma il lavoro di tutti gli altri progetti.
 
 **Stato del cantiere (aperto/trappole/chi fa cosa):**
@@ -13,57 +14,82 @@
 ## La mappa in 30 secondi
 
 ```
- ⌘S  ──► App._da_scorciatoia ──► _parti ──┬─► LA BARRA SI APRE SUBITO (~250 ms)
-                                     │    └─► Microfono.accendi  → thread suo
-                       mentre parli  ├──► _ciclo_anteprima ──► blocchi di voce ──► Whisper
-                                     │                          (non si vede: la barra
- ⌘S  ──► _ferma ──────────────────────┘                          resta una nocciola)
-                                     ▼
-                        _elabora ──► Whisper (audio intero)
-                                 ──► correzioni.txt (regex) + vocabolario.txt (nomi propri)
-                                 ──► LLM Groq (pulitura secondo il MODO)
-                                 ──► ripulisci_segni ──► appunti (NSPasteboard) + storico.md
+ launchd (KeepAlive) ──► Dettatura (l'app: AppKit, barra, menu, Groq) ──► figlio «--microfono» caldo
+                                                                          (PortAudio, mai nell'app)
+ ⌘S ──► _da_scorciatoia ──► _parti ──┬─► LA BARRA SI APRE SUBITO (~5-40 ms)
+                                     └─► Microfono.accendi ─► il figlio rilegge i dispositivi,
+                                                              apre quello scelto (▾) o il predefinito
+            mentre parli: audio dal figlio ─► _arriva_audio (pezzi + onda)
+ ⌘S ──► _ferma ──► Microfono.spegni ──► l'ultima parola arriva ──► _dopo_la_registrazione
+                                                         │   (troppo corto? muto? si trascrive?)
+                                                         ▼
+     _elabora ──► metti_da_parte (da-trascrivere/) ──► Whisper (con tentativi) ──► correzioni
+              ──► LLM a pezzi (se fallisce: il grezzo) ──► ripulisci_segni ──► appunti + storico
+              └─► Groq giù: resta in da-trascrivere/ e si riprova DA SOLA (_pianifica_recupero)
 ```
 
 | File | Cos'è | Righe |
 |---|---|---|
-| `dettatura.py` | **tutto il cervello**: config, Groq, `Microfono`, menu, `--check`, diario | ~1130 |
-| `scorciatoia.py` | **⌘S**: Carbon `RegisterEventHotKey` via ctypes — nessun permesso, nessun thread | 175 |
-| `pannello.py` | la barra di vetro (PyObjC puro: blur, onda a 60 fps, animazioni) | ~1680 |
-| `installa.sh` | ricompila (PyInstaller) → firma → copia in `/Applications` → `--check` → riapre | 44 |
-| `ferma.sh` | `pkill -9` (un'app `LSUIElement` non compare in «Uscita forzata») | 4 |
-| `avvio-automatico.sh` | accende/spegne il LaunchAgent `com.reda.dettatura` | 66 |
+| `dettatura.py` | **il cervello**: config, Groq (tentativi, pulitura a pezzi), registrazione, recupero, menu, diagnosi, `--check` | ~2160 |
+| `microfono.py` | **il microfono in un processo a parte**: il figlio (`figlio()`) e chi lo governa (`Microfono`) | ~590 |
+| `pannello.py` | la barra di vetro (PyObjC puro: blur, onda a 60 fps, animazioni, il ▾ del microfono) | ~1850 |
+| `scorciatoia.py` | **⌘S**: Carbon `RegisterEventHotKey` via ctypes — nessun permesso, nessun thread | 178 |
+| `installa.sh` | compila (PyInstaller) → ferma la vecchia → firma → `--check` → riaccende con launchd | 64 |
+| `avvio-automatico.sh` | il LaunchAgent `com.reda.dettatura`: parte al login, **si riapre se muore** | 97 |
+| `ferma.sh` | toglie l'app a launchd (se no rinasce) e `pkill -9` app + figli | 15 |
 | `fai-icona.py` | genera `Dettatura.icns` (Python puro, zero dipendenze) | 539 |
-| `requirements.txt` | le 7 dipendenze dirette (le altre arrivano da sole) | 10 |
+| `requirements.txt` | le 7 dipendenze dirette (le altre arrivano da sole) | 12 |
 | `*.esempio.txt` | vocabolario e correzioni **finti**, versionati: i veri sono gitignorati | — |
-| `prova-*.py` | banchi di prova isolati (barra, errori, audio finto, **`prova-scorciatoia.py`: ⌘S sintetico**) | — |
-| `dettatura.log` | il **diario** (gitignored, accanto allo storico): avvio, scorciatoia, ogni pressione, ogni dettatura | — |
+| `prova-*.py` | banchi di prova (vedi «Prima di dire fatto») | — |
+| `dettatura.log` | il **diario** (gitignored): avvio con versione e permesso, ogni pressione, ogni dettatura, ogni guasto | — |
+| `da-trascrivere/` | l'audio delle dettature che Groq non ha trascritto (gitignored: è la voce di Reda) | — |
 
 ### I punti d'ingresso di `dettatura.py`
 
 | Riga ~ | Cosa |
 |---|---|
-| `_cartelle()` 86 | **risorse sigillate ≠ dati modificabili** (vedi sotto) |
-| `Groq` 276 | trascrizione + scelta automatica dell'LLM (`LLM_PREFERITI`, scarta i `MAI`) |
-| `ripulisci_segni` 368 | toglie virgolette curve, trattini lunghi e spazi invisibili · **gli accenti NON si toccano** |
-| `negli_appunti` 384 | NSPasteboard, **mai `pbcopy`** — vedi le trappole |
-| `_log` 408 | il diario `dettatura.log` (stderr + file): è lì che si legge se ⌘S arriva |
-| `Microfono` 428 | **CoreAudio fuori dal thread principale**, e la chiusura fuori da tutto: è la difesa dal deadlock di PortAudio |
-| `App` 564 | la classe che è l'app: menu, icona, tick, ciclo di registrazione |
-| `App._avvia_ascolto` 638 | **registra ⌘S con Carbon** e legge la risposta di macOS (noErr o un errore) |
-| `App._tick` 809 | battito ogni 0,1 s: icona, cronometro, coda degli eventi, il picco del volume all'onda |
-| `App._parti` 956 | apre **prima la barra**, poi chiede il microfono |
-| `_autodiagnosi` 1145 | `Dettatura --check` |
-| `_istanza_unica` 1210 | lock `fcntl` su `.dettatura.lock` |
+| `_cartelle()` 130 | **risorse sigillate ≠ dati modificabili** (vedi sotto) |
+| `Groq` 400 · `_chiama` 465 | tentativi su rete/429/5xx, **scadenza 90 s** per chiamata; 401/400 non si riprovano |
+| `Groq.ripulisci` 526 | **a pezzi da 6000 caratteri** (8000 token/min), un pezzo fallito resta grezzo |
+| `suggerimento_whisper` 611 | il prompt di Whisper **dentro 880 caratteri** (Groq rifiuta oltre 896) |
+| `codifica` 624 | FLAC, o Opus se supera i 24 MB |
+| `metti_da_parte` 643 | l'audio su disco PRIMA di Groq: si cancella solo a trascrizione riuscita |
+| `negli_appunti` 717 | NSPasteboard, **mai `pbcopy`** — vedi le trappole |
+| `_log` 745 | il diario (ruota da solo oltre 512 KB in `dettatura.log.1`) |
+| `permesso_microfono` 786 | il permesso Microfono via AVFoundation dal runtime (caricato all'avvio) |
+| `_menu_modifica` 856 | il menu Modifica: senza, ⌘C/⌘V/⌘A/⌘Z non funzionano nella barra |
+| `App._stato_iniziale` 951 | **tutto lo stato** che non parla con macOS — lo usano anche le prove |
+| `App._premuto` 1113 | una pressione (scorciatoia o bottone), con il filtro dei doppi tocchi |
+| `App._voci_microfoni` 1161 · `scegli_microfono_da` 1194 | il menu dei microfoni (sottomenu e ▾ nella barra) |
+| `App._pianifica_recupero` 1273 | le dettature messe da parte si riprovano da sole |
+| `App._testo_attuale` 1354 | a cosa si accoda la dettatura nuova: **solo alla barra aperta** |
+| `App._battito` 1386 | il battito ogni 0,1 s (avvolto da `_tick`, che scrive i guasti nel diario) |
+| `App._parti` 1640 · `_ferma` 1704 · `_dopo_la_registrazione` 1720 | inizio, fine, e cosa farne dell'audio |
+| `App._dalla_voce_al_testo` 1753 · `_elabora` 1812 · `_recupera` 1849 | la catena, e i suoi due ingressi |
+| `_autodiagnosi` 1921 | `Dettatura --check` (fa nascere un figlio e gli fa elencare i microfoni) |
+| `_installa_diagnosi` 2029 · `_guardiano` 2085 | eccezioni e crash nel diario · esce se il thread principale si pianta |
+| `_senza_rubare_il_fuoco` 2112 | rumps non deve attivare l'app quando parte |
+
+### `microfono.py`
+
+| Riga ~ | Cosa |
+|---|---|
+| `figlio()` 77 | il processo del microfono: caldo → «via» → registra → «basta» → consegna → `os._exit` (lo stream NON si chiude) |
+| `_microfoni` 194 | PortAudio rilegge l'elenco da capo: i dispositivi di ADESSO |
+| `Microfono` 293 | `accendi` · `spegni` · `annulla` · `cambia` (anche a dettatura in corso) · `aggiorna_elenco` |
+| `Microfono._sorveglia` 533 | la guardia: apertura impiccata → figlio nuovo; muto da 2 s o morto → lo riprende; caldo sempre pronto |
 
 ### E in `pannello.py`
 
 | Riga ~ | Cosa |
 |---|---|
-| `Onda` 514 | le linee che si allargano e si stringono: 60 fps, cresta che viaggia, gradiente blu→viola |
-| `Pannello._spia_clic` 1435 | il clic **fuori** dalla barra la chiude (monitor globale del mouse: nessun permesso) |
-| `Pannello.chiudi` 1536 | **dissolvenza sul posto** — non si risucchia più verso l'icona |
-| `Pannello._battito` 1700 | il motorino a 60 fps dell'onda e del respiro del REC |
+| `Bottone` 421 | i bottoni rispondono al **primo** clic (la barra non è la finestra attiva) |
+| `Onda` 556 | le linee che si allargano e si stringono: 60 fps, cresta che viaggia, gradiente blu→viola |
+| `Pannello._spia_clic` 1499 | il clic **fuori** dalla barra la chiude (monitor globale del mouse: nessun permesso) |
+| `Pannello._mostra` 1529 | **davanti a tutto senza rubare la tastiera**: ⌘V resta di Warp |
+| `Pannello.chiudi` 1613 | **dissolvenza sul posto** — non si risucchia più verso l'icona |
+| `Pannello._battito` 1771 | il motorino a 60 fps dell'onda e del respiro del REC |
+| `sceltaMicrofono_` 1845 | il ▾ in fondo alla nocciola (riposo, registrazione, errore) |
 
 ---
 
@@ -71,9 +97,10 @@
 
 1. **Italiano ovunque**: nomi di funzioni, variabili, commenti, messaggi. `_parti`, `_ferma`, `negli_appunti`. Non introdurre nomi inglesi.
 2. **I commenti spiegano il PERCHÉ**, mai il cosa — spesso con la trappola che li ha generati (vedi la firma in `installa.sh`). Se togli un commento del genere, la prossima sessione ricasca nel buco.
-3. **Zero dipendenze inutili**: `fai-icona.py` disegna l'icona con Python puro. Prima di aggiungere un pacchetto, chiedi.
-4. **Config fuori dal bundle.** Dentro un `.app` il codice è sigillato, quindi `vocabolario.txt`, `correzioni.txt`, `.env`, `storico.md` e `dettatura.log` vivono in `~/Progetti/dettatura/` (fallback: `~/Library/Application Support/Dettatura/`). **Si modificano senza ricompilare.** `installa.sh` serve solo dopo aver toccato `dettatura.py` o `pannello.py`. I primi tre **non sono nel repo**: `_primo_avvio()` li semina dai `.esempio` (e `.env` vuoto) alla prima accensione, da sorgente come da bundle.
-5. **Il testo che vede Reda è prodotto**: i messaggi della barra e del menu si scrivono come frasi vere, non come errori tecnici.
+3. **Zero dipendenze inutili**: `fai-icona.py` disegna l'icona con Python puro; il permesso Microfono si legge da AVFoundation **dal runtime**, senza pyobjc-framework-AVFoundation. Prima di aggiungere un pacchetto, chiedi.
+4. **Config fuori dal bundle.** Dentro un `.app` il codice è sigillato, quindi `vocabolario.txt`, `correzioni.txt`, `.env`, `storico.md`, `dettatura.log` e `da-trascrivere/` vivono in `~/Progetti/dettatura/` (fallback: `~/Library/Application Support/Dettatura/`). **Si modificano senza ricompilare e senza riavviare**: l'app li rilegge da sola ogni 2 s se cambiano (`_ricarica_se_cambiata`). `installa.sh` serve solo dopo aver toccato il codice. I primi tre **non sono nel repo**: `_primo_avvio()` li semina dai `.esempio` (e `.env` vuoto) alla prima accensione.
+5. **Il testo che vede Reda è prodotto**: i messaggi della barra e del menu si scrivono come frasi vere, non come errori tecnici. Gli errori sono `Errore(...)` (pannello.py): la barra li dipinge d'arancione da sé, anche quelli col nome del microfono dentro.
+6. **Ogni thread di lavoro manda SEMPRE l'ultimo avviso** (`finally`): se muore zitto, l'app resta su «trascrivo…» per sempre.
 
 ## Le tre modalità (menu · «Modo»)
 
@@ -87,60 +114,94 @@
 
 ## 🔴 Trappole — lette PRIMA di toccare qualcosa
 
+- **CoreAudio NON torna nell'app. Mai.** Il 12/9 la chiusura dello stream PortAudio si impiccava
+  in un deadlock dentro CoreAudio (`sample`: `Pa_AbortStream → AudioDeviceStop ↔ startStopCallback`,
+  zero Python negli stack). Chiudere in un thread usa-e-getta salvava il thread principale ma NON il
+  microfono: il thread audio restava appeso col lucchetto del dispositivo, e ogni apertura dopo ci
+  finiva dietro (diario 22/9 e 26/9: «nessuna risposta, lo do per perso» fino al riavvio del Mac).
+  Dentro un processo non si scioglie: per questo il microfono vive in `figlio()`, registra una
+  dettatura e muore con `os._exit` **senza chiudere lo stream**. Anche elencare i microfoni lo fa
+  il figlio. Se ti viene voglia di un `import sounddevice` in `dettatura.py`: no.
+- **PortAudio legge l'elenco dei dispositivi UNA volta, quando si carica.** Un'app accesa da giorni
+  registrava dal microfono predefinito del giorno dell'avvio: coperchio chiuso, iPhone arrivato o
+  andato, cuffie → dispositivo muto o sparito (diario 14/9: 4 minuti e mezzo di parlato, «non ho
+  sentito la voce»). Il figlio fa `sd._terminate(); sd._initialize()` appena prima di aprire.
+- **Il microfono del MacBook nel silenzio manda il 99% di ZERI ESATTI**, fino a 1,8 s di fila
+  (misurato l'11/10). Quindi «silenzio digitale» non vuol dire «microfono morto» finché non dura:
+  la soglia è `MUTO_DOPO` = 8 s di soli zeri. Non abbassarla senza rimisurare.
+- **Groq: il prompt di Whisper oltre 896 caratteri è un 400 — e nessuna dettatura si trascrive
+  più.** `suggerimento_whisper` lo costruisce dentro il limite. **gpt-oss-120b sul piano gratuito:
+  8.000 token al MINUTO**, risposta compresa: per questo la pulitura va a pezzi. Con
+  `reasoning_effort: low` + `include_reasoning: false` la pulitura scende a ~1 s.
+- **Una dettatura non si butta MAI.** Sopra i 4 s si manda sempre a Whisper (una soglia di volume
+  fissa buttava via chi parla piano); l'audio va in `da-trascrivere/` prima di Groq; se la pulitura
+  fallisce o l'LLM rende il vuoto, negli appunti va il grezzo. Se tocchi `_elabora`, tieni questi tre.
 - **`pbcopy` NON riceve testo: riceve byte, e li legge con l'encoding dell'ambiente.** Un `.app`
-  lanciato dal Finder o da un LaunchAgent non eredita `LANG` da nessuna shell → CoreFoundation
-  ripiega su **MacRoman** (`ps eww <pid>` sul processo: `__CF_USER_TEXT_ENCODING=0x1F5:0x0:0x0`,
-  quel `0x0` è MacRoman). Risultato: `perché` incollato diventa `perch√©`, `più` → `pi√π`, le
-  virgolette curve → `‚Äú`. La barra mostrava il testo giusto e l'incolla no, perché in mezzo
-  c'era un cambio di alfabeto — tre mesi di dettature sporche. **Si copia con NSPasteboard, che
-  prende una stringa.** Da terminale il bug non si vede mai (lì `LANG` c'è): per riprodurlo,
+  lanciato dal Finder o da launchd non eredita `LANG` → MacRoman: `perché` → `perch√©`. **Si copia
+  con NSPasteboard.** Da terminale il bug non si vede mai: per riprodurlo,
   `env -i HOME=$HOME PATH=/usr/bin:/bin __CF_USER_TEXT_ENCODING=0x1F5:0x0:0x0 …`.
-- **Il freeze con la rotellina era un deadlock di PortAudio, non un bug nostro.** Fotografato con
-  `sample` il 12/9: il thread che chiude fa `Pa_AbortStream → AudioDeviceStop → HALB_Mutex::Lock`
-  e aspetta; il thread audio di CoreAudio esegue `startStopCallback` (di PortAudio) →
-  `AudioUnitGetProperty` e aspetta un altro mutex. **Nessuna riga di Python nei due stack.**
-  Succede ogni tanto e non si può impedire con PortAudio 19.7 (12 giri isolati non lo riproducono,
-  l'app viva sì). Si può solo decidere chi resta appeso: **la chiusura dello stream va in un thread
-  usa-e-getta** (se sta in coda, blocca tutte le accensioni dopo di lei — sintomo: «registro…» nel
-  diario senza nessun «microfono aperto», e ⌘S che non registra più in silenzio) e **il thread
-  principale non tocca mai CoreAudio** (se si impicca lui, è la rotellina e il force quit).
-  🔴 Non rimettere `sd.InputStream()` in `_parti`: è da lì che veniva il freeze.
-- **Niente `rumps.alert` in un'app senza icona nel Dock.** Un NSAlert modale può nascere DIETRO a
-  tutto: non lo vedi, il run loop entra in modal mode, e da fuori l'app sembra piantata. Gli
-  avvisi si dicono nella barra (`ERR_MIC`, `ERR_CHIAVE`).
-- **La barra si apre in `_parti`, prima del microfono.** Fino al 12/9 non la apriva nessuno:
-  compariva quando tornava il primo blocco di anteprima da Whisper, cioè **dieci secondi dopo**
-  ⌘S. Il microfono, misurato, ci mette 0,39 s: non era lui. Se qualcuno toglie quella `p.apri()`,
-  il ritardo torna e sembrerà di nuovo colpa dell'audio.
-- **⌘S non passa più da pynput, e NON deve tornarci.** pynput usa un event tap in sola lettura che vuole «Monitoraggio input» (`kTCCServiceListenEvent`), un permesso DIVERSO dall'Accessibilità: senza, il tap nasce lo stesso (`is_alive()` sì, `AXIsProcessTrusted` sì) e i tasti non arrivano mai — tre sessioni perse il 12/9 a inseguire l'Accessibilità, mentre tccd diceva `authValue=0` e il README di agosto lo scriveva già. In più pynput 1.8 scarta gli eventi «iniettati»: non si può nemmeno provare da terminale. Oggi la scorciatoia è Carbon (`scorciatoia.py`): zero permessi, e scatta anche su un ⌘S sintetico. **Se «⌘S non fa niente»: prima `cat dettatura.log`** — dopo l'avvio deve dire «scorciatoia ⌘S registrata», e ogni pressione lascia «⌘S premuta». Niente «premuta» = l'app non gira (`pgrep -f Dettatura`), o un'altra app ha registrato ⌘S prima di lei.
-- **Non toccare le righe `codesign` di `installa.sh`.** PyInstaller non è riproducibile: con la firma ad-hoc di serie l'identità dell'app per macOS è l'hash → ogni ricompilazione è un'app nuova → permessi da riconcedere. L'àncora all'identificatore (`designated => identifier "com.reda.dettatura"`) è ciò che li fa sopravvivere. Provato sul campo il 12/9.
-- **`open -a App --stderr file` APPENDE, non sovrascrive.** Un log di diagnosi si `rm` prima, o si conta con `wc -l` prima e dopo — altrimenti rileggi errori vecchi e credi che il fix non abbia funzionato.
-- **`--check` non prova che il tasto ARRIVI**: controlla solo che la combinazione del `.env` sia registrabile. La prova dell'effetto è `./ferma.sh && .venv/bin/python prova-scorciatoia.py` (⌘S sintetico, deve dire «2 volte su 2»), e sul bundle installato le righe «⌘S premuta → registro…» in `dettatura.log`.
-- **macOS lascia registrare lo stesso ⌘S a due processi senza errore** (provato: `-9878` arriva solo per un doppione nello STESSO processo). Quindi il banco di prova si lancia ad app CHIUSA, e se un'altra utility prende ⌘S la nostra tace senza avvisi.
-- **Istanza unica** via `fcntl` su `.dettatura.lock`: sorgente e bundle si vedono a vicenda. `open -n` la aggira → dopo i test, `./ferma.sh`.
+- **La barra non deve diventare la finestra attiva.** Con `makeKeyAndOrderFront_` +
+  `activateIgnoringOtherApps_` ⌘V finiva a Dettatura e in Warp non arrivava niente finché Reda non
+  cliccava. `Pannello._mostra` usa `orderFrontRegardless`; i bottoni hanno `acceptsFirstMouse_`. E
+  rumps all'avvio attiverebbe l'app (`_senza_rubare_il_fuoco` lo spegne): con launchd che la rialza,
+  i tasti di Reda finivano nel vuoto a metà frase.
+- **La barra dei menu di Reda si nasconde da sola** (`_HIHideMenuBar = 1`) e Warp è a tutto
+  schermo: l'icona in alto quasi non si vede, e la barra esce in alto al centro (ripiego di `_casa`).
+  Quello che conta va messo **nella barra** (il ▾ del microfono) o deve funzionare da solo (il
+  recupero delle dettature), non solo nel menu.
+- **launchd con `open -a` non sorveglia niente**: `open` finisce subito e per launchd l'app non
+  esiste. Il 1/10 l'app è sparita (con lo swap pieno: probabilmente l'ha chiusa macOS) e per 10 giorni
+  ⌘S è stata muta. Il plist lancia il binario dentro l'app con `KeepAlive SuccessfulExit=false`:
+  muore da sola → rinasce in 1 s (provato con `kill -9`); esce con 0 (Esci, ⌘⇧⌥Q, istanza doppia)
+  → resta giù.
+- **Per fermarla davvero serve `./ferma.sh`** (fa `launchctl bootout`): un `pkill` e basta la fa
+  rinascere. Per riaccenderla: `./avvio-automatico.sh`.
+- **Niente `rumps.alert`** (e niente NSAlert): in un'app senza finestre un modale nasce dietro a
+  tutto e sembra un blocco. Gli avvisi si dicono nella barra. Anche l'avviso di PyObjC per le
+  eccezioni nel run loop è spento (`AppHelper.unexpectedErrorAlertPanel`, in `_installa_diagnosi`).
+- **⌘S non passa più da pynput, e NON deve tornarci.** pynput vuole «Monitoraggio input»
+  (`kTCCServiceListenEvent`): senza, il tap nasce e i tasti non arrivano mai — tre sessioni perse
+  il 12/9 a inseguire l'Accessibilità. Carbon (`scorciatoia.py`) non chiede permessi, scatta anche
+  su un ⌘S sintetico e **una volta sola per pressione** anche tenendo giù il tasto (provato l'11/10).
+- **Non toccare le righe `codesign` di `installa.sh`.** L'àncora all'identificatore
+  (`designated => identifier "com.reda.dettatura"`) fa sopravvivere il permesso Microfono alle
+  ricompilazioni. Il figlio del microfono è lo stesso eseguibile: stesso permesso.
+- **`soundfile` su un `BytesIO`: la dimensione si prende da `getvalue()`, non da `tell()`** — finito
+  di scrivere un FLAC libsndfile torna in cima a riscrivere l'intestazione (tell() ≈ 40 byte).
+- **La prima lettura del permesso carica AVFoundation: 0,5 s da solo, 3 s dentro l'app viva.**
+  Per questo si fa all'avvio: alla prima ⌘S si mangiava la prima frase.
+- **Le prove col microfono vero prendono la stanza**: con gente che parla, Whisper trascrive sul
+  serio e il testo finisce negli appunti e in `storico.md`. Prima di un giro con `prova-bundle.py`:
+  salva gli appunti e la dimensione dello storico, e rimettili dopo.
+- **`open -a App --stderr file` APPENDE, non sovrascrive.** Un log di diagnosi si `rm` prima.
+- **macOS lascia registrare lo stesso ⌘S a due processi senza errore**: `prova-scorciatoia.py` si
+  lancia ad app CHIUSA (`./ferma.sh`), poi `./avvio-automatico.sh`.
+- **Istanza unica** via `fcntl` su `.dettatura.lock`: sorgente e bundle si vedono a vicenda.
 - **macOS non ha `timeout`** (usa `curl --max-time`, o un loop con `sleep`).
-- **Chiudere la finestra non chiude l'app**: è `LSUIElement`, vive solo nella barra dei menu.
 
 ## Comandi
 
 ```bash
-./installa.sh                 # ricompila + firma + installa + --check + riapre
-./ferma.sh                    # la uccide anche se piantata
-./avvio-automatico.sh         # LaunchAgent: parte a ogni accesso (`spegni` per togliere)
+./installa.sh                 # ricompila + ferma la vecchia + firma + --check + riaccende con launchd
+./ferma.sh                    # la ferma davvero (anche piantata): launchd non la riapre
+./avvio-automatico.sh         # LaunchAgent con KeepAlive: parte ora e a ogni accesso (`spegni` per togliere)
+launchctl kickstart -k gui/$UID/com.reda.dettatura    # riavvio pulito
 /Applications/Dettatura.app/Contents/MacOS/Dettatura --check
-.venv/bin/python dettatura.py # gira da sorgente (ma occupa il lock: prima ./ferma.sh)
-./ferma.sh && .venv/bin/python prova-scorciatoia.py   # ⌘S arriva? (ad app chiusa, 4 s)
-.venv/bin/python prova-barra.py scatti   # i 10 stati della barra + 10 screenshot
-cat dettatura.log             # il diario: avvio, scorciatoia, pressioni, dettature
+.venv/bin/python dettatura.py # da sorgente (ma occupa il lock: prima ./ferma.sh)
+cat dettatura.log             # il diario: avvio (versione, permesso), pressioni, microfoni, dettature, guasti
 ```
 
-**Come si guarda la barra dell'app VIVA** (non il banco di prova): la capsula è una finestra
-vera, quindi si misura con `CGWindowListCopyWindowInfo` filtrando `kCGWindowOwnerName ==
-"Dettatura"` e `Height >= 35` (sotto c'è l'icona nella barra dei menu, che è un'altra finestra
-sua). È così che si prova che la barra compare **subito** dopo ⌘S: si manda un ⌘S sintetico e si
-conta quanto ci mette a esistere.
+**Come si guarda la barra dell'app VIVA**: la capsula è una finestra vera, quindi si misura con
+`CGWindowListCopyWindowInfo` filtrando `kCGWindowOwnerName == "Dettatura"` e `Height >= 35`.
+L'icona nella barra dei menu da fuori NON si vede in `CGWindowList` (su macOS 26 la ospita il sistema).
 
-**Prima di dire «fatto»:** `python -m py_compile` sui file toccati → `./installa.sh` (finisce con `--check` e riapre l'app) → **⌘S sintetica sul bundle installato** (un `CGEventPost` di ⌘S dal `.venv`, oppure `prova-scorciatoia.py` ad app chiusa) → `cat dettatura.log` deve mostrare «⌘S premuta → registro…». Poi Reda la prova con le dita: è l'unica cosa che qui non si può simulare al 100%.
+**Prima di dire «fatto»:**
+1. `py_compile` + pyflakes sui file toccati (pyflakes non è nel venv: `pip install --target` in uno scratch)
+2. `prova-logica.py` (niente rete né microfono) · `prova-errore.py` · `prova-barra.py`
+3. `prova-microfono.py` se hai toccato `microfono.py` (usa il microfono vero per ~30 s)
+4. `./installa.sh` (finisce con `--check`, che fa nascere un figlio dal bundle vero)
+5. `prova-bundle.py` (8 dettature sull'app installata) · `prova-clic.py`
+6. Una dettatura vera e uno screenshot. Poi Reda la prova con le dita.
 
 ## 🔴 Dove vive il codice — ed è PUBBLICO
 
@@ -151,10 +212,10 @@ non si possono dimenticare:
   (clienti, colleghi, progetti): erano la rubrica di Reda in chiaro. Nel repo ci
   sono solo `vocabolario.esempio.txt` e `correzioni.esempio.txt`, con nomi finti —
   `_primo_avvio()` ne fa la copia vera alla prima accensione. **Se scrivi un nome
-  vero dentro un file versionato (README, prova-*.py, commenti), finisce online.**
-- **`.scratch/` è fuori dal repo**: 38 MB su 39 di prototipi, note interne e
-  screenshot che avevano il nome di un cliente scritto *dentro l'immagine*. Resta
-  sul Mac, non si ri-aggiunge.
+  vero dentro un file versionato (README, prova-*.py, commenti), finisce online** —
+  compresi i nomi dei microfoni (l'iPhone porta il nome del proprietario): negli
+  esempi si usa «Mario Rossi».
+- **`.scratch/` e `da-trascrivere/` sono fuori dal repo**: prototipi e screenshot
+  la prima, la voce di Reda la seconda.
 - **La storia è stata riscritta** il 12/9 (`filter-branch`) per togliere nomi e
-  `.scratch` da tutti i commit: 37 → 30 commit, `.git` da 49 MB a 1 MB. Chi avesse
-  un vecchio clone deve ri-clonare.
+  `.scratch` da tutti i commit. Chi avesse un vecchio clone deve ri-clonare.
