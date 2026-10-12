@@ -32,7 +32,9 @@
 |---|---|---|
 | `dettatura.py` | **il cervello**: config, Groq (tentativi, pulitura a pezzi), registrazione, recupero, menu, diagnosi, `--check` | ~2160 |
 | `microfono.py` | **il microfono in un processo a parte**: il figlio (`figlio()`) e chi lo governa (`Microfono`) | ~590 |
-| `pannello.py` | la barra di vetro (PyObjC puro: blur, onda a 60 fps, animazioni, il ▾ del microfono) | ~1850 |
+| `pannello.py` | la barra di vetro (PyObjC puro: blur, onda a 60 fps, animazioni, il ▾ del microfono, il ⚙) | ~1890 |
+| `impostazioni.py` | la finestra del ⚙: **Chiave Groq · Storico · Parole speciali** (solo la faccia: il lavoro lo fa l'app) | ~650 |
+| `archivio.py` | storico, vocabolario e correzioni letti e **riscritti senza perdere niente** (puro, niente AppKit) | ~235 |
 | `scorciatoia.py` | **⌘S**: Carbon `RegisterEventHotKey` via ctypes — nessun permesso, nessun thread | 178 |
 | `installa.sh` | compila (PyInstaller) → ferma la vecchia → firma → `--check` → riaccende con launchd | 64 |
 | `avvio-automatico.sh` | il LaunchAgent `com.reda.dettatura`: parte al login, **si riapre se muore** | 97 |
@@ -66,6 +68,7 @@
 | `App._battito` 1386 | il battito ogni 0,1 s (avvolto da `_tick`, che scrive i guasti nel diario) |
 | `App._parti` 1640 · `_ferma` 1704 · `_dopo_la_registrazione` 1720 | inizio, fine, e cosa farne dell'audio |
 | `App._dalla_voce_al_testo` 1753 · `_elabora` 1812 · `_recupera` 1849 | la catena, e i suoi due ingressi |
+| `App.apri_impostazioni` · `prova_chiave` · `salva_chiave` · `salva_parole` | quello che la finestra del ⚙ chiede all'app (la chiave si salva solo se Groq la accetta) |
 | `_autodiagnosi` 1921 | `Dettatura --check` (fa nascere un figlio e gli fa elencare i microfoni) |
 | `_installa_diagnosi` 2029 · `_guardiano` 2085 | eccezioni e crash nel diario · esce se il thread principale si pianta |
 | `_senza_rubare_il_fuoco` 2112 | rumps non deve attivare l'app quando parte |
@@ -168,6 +171,14 @@
   ricompilazioni. Il figlio del microfono è lo stesso eseguibile: stesso permesso.
 - **`soundfile` su un `BytesIO`: la dimensione si prende da `getvalue()`, non da `tell()`** — finito
   di scrivere un FLAC libsndfile torna in cima a riscrivere l'intestazione (tell() ≈ 40 byte).
+- **Le parole speciali sono DUE file mostrati come UNA lista** (49 regole su 51 sono di parole
+  già nel vocabolario): `archivio.scrivi_parole` li riscrive tenendo intestazione e gruppi, ma i
+  gruppi di `correzioni.txt` diventano quelli del vocabolario. Prima di scrivere la versione vecchia
+  va in `~/Library/Application Support/Dettatura/copie-di-sicurezza/` — FUORI dal repo, che è
+  pubblico. Provato sui file veri: 51 regole identiche, nessuna voce persa, secondo giro identico.
+- **La tabella delle parole è a celle** (`NSTableView` senza `viewForTableColumn`): API vecchia ma
+  funzionante su macOS 26, e tre metodi bastano per modificare. Se un macOS futuro la togliesse,
+  il sintomo è una tabella vuota: si passa alle viste.
 - **La prima lettura del permesso carica AVFoundation: 0,5 s da solo, 3 s dentro l'app viva.**
   Per questo si fa all'avvio: alla prima ⌘S si mangiava la prima frase.
 - **Le prove col microfono vero prendono la stanza**: con gente che parla, Whisper trascrive sul
@@ -197,7 +208,8 @@ L'icona nella barra dei menu da fuori NON si vede in `CGWindowList` (su macOS 26
 
 **Prima di dire «fatto»:**
 1. `py_compile` + pyflakes sui file toccati (pyflakes non è nel venv: `pip install --target` in uno scratch)
-2. `prova-logica.py` (niente rete né microfono) · `prova-errore.py` · `prova-barra.py`
+2. `prova-logica.py` (niente rete né microfono) · `prova-errore.py` · `prova-barra.py` ·
+   `prova-impostazioni.py` (la finestra del ⚙ su file finti; `scatti` per le foto)
 3. `prova-microfono.py` se hai toccato `microfono.py` (usa il microfono vero per ~30 s)
 4. `./installa.sh` (finisce con `--check`, che fa nascere un figlio dal bundle vero)
 5. `prova-bundle.py` (8 dettature sull'app installata) · `prova-clic.py`

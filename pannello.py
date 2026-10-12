@@ -116,8 +116,9 @@ ERR_GENERICO = Errore("errore: il dettaglio è in dettatura.log")
 # vedi, il run loop entra in modal mode, e da fuori l'app sembra piantata —
 # rotellina compresa. Un avviso dentro la barra si legge e non blocca niente.
 ERR_MIC = Errore("microfono non disponibile")
-ERR_CHIAVE = Errore("manca la chiave Groq nel .env")
-ERR_CHIAVE_RIFIUTATA = Errore("Groq rifiuta la chiave: controlla il .env")
+# le due della chiave aprono da sole la scheda Chiave delle impostazioni
+ERR_CHIAVE = Errore("manca la chiave Groq")
+ERR_CHIAVE_RIFIUTATA = Errore("Groq rifiuta la chiave")
 ERR_PERMESSO = Errore("manca il permesso del Microfono")
 # la rete: la dettatura NON è persa, sta in da-trascrivere/ e il menu la riprova
 ERR_RETE = Errore("Groq non risponde: dettatura messa da parte")
@@ -816,7 +817,13 @@ class Pannello(NSObject):
                                        "Scegli il microfono", lato=LATO_SCELTA,
                                        peso=NSFontWeightMedium)
         self.b_microfono.setContentTintColor_(NSColor.labelColor())
-        for b in (self.b_svuota, self.b_copia, self.menu_btn, self.b_microfono):
+        # il ⚙ delle impostazioni (chiave Groq, storico, parole speciali): a
+        # riposo e sugli errori, accanto al ▾. Nella distesa ci pensa il •••
+        self.b_impostazioni = self._icona("gearshape", 13, "impostazioni:",
+                                          "Impostazioni: chiave Groq, storico, parole speciali",
+                                          lato=LATO_SCELTA)
+        for b in (self.b_svuota, self.b_copia, self.menu_btn, self.b_microfono,
+                  self.b_impostazioni):
             self.contenuto.addSubview_(b)
 
         # Sopra i bottoni ma sotto il filo. L'ordine è tutto: sotto i bottoni
@@ -982,8 +989,15 @@ class Pannello(NSObject):
         return forma in (REGISTRA, RIPOSO, ERRORE)
 
     @objc.python_method
+    def _con_impostazioni(self, forma) -> bool:
+        """Il ⚙ c'è a riposo e sugli errori: «manca la chiave Groq» si
+        risolve proprio lì. Mentre parli no: la nocciola resta onda e tempo."""
+        return forma in (RIPOSO, ERRORE)
+
+    @objc.python_method
     def _coda_messaggio(self, forma) -> float:
-        return CODA_MSG + (LATO_SCELTA if self._con_scelta(forma) else 0)
+        return (CODA_MSG + (LATO_SCELTA if self._con_scelta(forma) else 0)
+                + (LATO_SCELTA + 2 if self._con_impostazioni(forma) else 0))
 
     # -- il layout ------------------------------------------------------------
     @objc.python_method
@@ -1020,6 +1034,7 @@ class Pannello(NSObject):
             (self.b_copia, not nocciola),
             (self.menu_btn, not nocciola),
             (self.b_microfono, self._con_scelta(forma)),
+            (self.b_impostazioni, self._con_impostazioni(forma)),
         ):
             if not visibile:
                 v.setHidden_(True)          # chi esce sparisce e basta
@@ -1080,6 +1095,10 @@ class Pannello(NSObject):
         if self._con_scelta(forma):
             telaio(self.b_microfono, NSMakeRect(L - CODA_SCELTA, (NOCC_A - LATO_SCELTA) / 2.0,
                                                 LATO_SCELTA, LATO_SCELTA))
+        if self._con_impostazioni(forma):
+            telaio(self.b_impostazioni,
+                   NSMakeRect(L - CODA_SCELTA - LATO_SCELTA - 2, (NOCC_A - LATO_SCELTA) / 2.0,
+                              LATO_SCELTA, LATO_SCELTA))
         if forma == REGISTRA:
             telaio(self.onda, NSMakeRect(X_ONDA, (NOCC_A - ONDA_A) / 2.0, ONDA_L, ONDA_A))
             telaio(self.crono, NSMakeRect(X_CRONO, (NOCC_A - 19) / 2.0, L_CRONO, 19))
@@ -1423,7 +1442,7 @@ class Pannello(NSObject):
         return (self.b_azione, self.onda, self.crono, self.messaggio,
                 self.scroll, self.conteggio,
                 self.nota, self.b_svuota, self.b_copia, self.menu_btn,
-                self.b_microfono)
+                self.b_microfono, self.b_impostazioni)
 
     @objc.python_method
     def _animato(self) -> bool:
@@ -1844,6 +1863,9 @@ class Pannello(NSObject):
 
     def sceltaMicrofono_(self, _s):
         self.app.scegli_microfono_da(self.b_microfono)
+
+    def impostazioni_(self, _s):
+        self.app.apri_impostazioni()
 
     @objc.python_method
     def imposta_microfono(self, nome: str):

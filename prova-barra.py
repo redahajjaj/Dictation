@@ -77,6 +77,9 @@ class AppFinta:
     def scegli_microfono_da(self, vista):
         self.microfono = getattr(self, "microfono", 0) + 1
 
+    def apri_impostazioni(self, scheda="chiave"):
+        self.impostazioni = getattr(self, "impostazioni", 0) + 1
+
 
 class VistaFondo(NSView):
     def impostaTipo_(self, tipo):
@@ -158,8 +161,12 @@ def main():
     m = p.b_microfono.frame()
     controlla("01 riposo: c'è il ▾ del microfono, dentro la capsula",
               not p.b_microfono.isHidden() and m.origin.x + m.size.width <= L - 8, f"x={m.origin.x:.0f}")
+    g = p.b_impostazioni.frame()
+    controlla("01 riposo: c'è il ⚙ delle impostazioni, prima del ▾",
+              not p.b_impostazioni.isHidden() and g.origin.x + g.size.width <= m.origin.x,
+              f"⚙ {g.origin.x:.0f}-{g.origin.x + g.size.width:.0f} · ▾ {m.origin.x:.0f}")
     controlla("01 riposo: il messaggio non ci passa sotto",
-              p.messaggio.frame().origin.x + p.messaggio.frame().size.width <= m.origin.x)
+              p.messaggio.frame().origin.x + p.messaggio.frame().size.width <= g.origin.x)
     scatta("01-riposo")
 
     # 02 registra
@@ -177,6 +184,7 @@ def main():
     controlla("02 registra: l'onda è salita", p.onda._liv > 0.6, f"{p.onda._liv:.2f}")
     controlla("02 registra: il motorino gira", p._t_onda is not None)
     controlla("02 registra: niente parole", p.messaggio.isHidden() and p.scroll.isHidden())
+    controlla("02 registra: niente ⚙ (si parla, non si configura)", p.b_impostazioni.isHidden())
     m = p.b_microfono.frame()
     c = p.crono.frame()
     controlla("02 registra: il ▾ sta dopo il cronometro, dentro la capsula",
@@ -272,6 +280,10 @@ def main():
               p.b_azione.contentTintColor() == NSColor.systemOrangeColor())
     controlla("09 errore: messaggio", str(p.messaggio.stringValue()) == "Non ho sentito la voce",
               str(p.messaggio.stringValue()))
+    controlla("09 errore: ⚙ e ▾ a portata di mano",
+              not p.b_impostazioni.isHidden() and not p.b_microfono.isHidden()
+              and p.messaggio.frame().origin.x + p.messaggio.frame().size.width
+              <= p.b_impostazioni.frame().origin.x)
     scatta("09-errore")
 
     # 09b l'errore vince sul testo già a video: se no sparirebbe prima di leggerlo
@@ -455,6 +467,8 @@ def main():
     p.premi_(None)
     p.sceltaMicrofono_(None)
     controlla("il ▾ chiede all'app l'elenco dei microfoni", getattr(finta, "microfono", 0) == 1)
+    p.impostazioni_(None)
+    controlla("il ⚙ apre le impostazioni", getattr(finta, "impostazioni", 0) == 1)
     controlla("i bottoni parlano con l'app",
               (finta.copiato, finta.svuotato, finta.premuto) == (1, 1, 1),
               str((finta.copiato, finta.svuotato, finta.premuto)))

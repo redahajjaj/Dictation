@@ -475,6 +475,46 @@ a._tick(None)
 controlla("se la fine della registrazione non arriva, si va avanti lo stesso",
           not a._chiudendo and a._etichetta == D.ERR_CORTO, a._etichetta)
 
+print("\n— le parole speciali: si riscrivono senza rovinarle —")
+import archivio as A  # noqa: E402
+A.COPIE = CARTELLA / "copie"
+righe = [A.Parola("Acmelux", "acme lux, , akme lux, ACME LUX, acmelux", "# --- progetti ---"),
+         A.Parola("acmelux", "doppione", "progetti"),
+         A.Parola("   ", "senza parola", "progetti"),
+         A.Parola("a = b", "rompe il formato", "progetti"),
+         A.Parola("Nordvento", "", ""),
+         A.Parola("Mario  Rossi", "mario rosi", "persone")]
+pulite = A.normalizza(righe)
+controlla("doppioni, righe vuote e righe rotte non si salvano",
+          [p.parola for p in pulite] == ["Acmelux", "Nordvento", "Mario Rossi"], str([p.parola for p in pulite]))
+controlla("le varianti si ripuliscono (vuote, doppie, uguali alla parola)",
+          pulite[0].varianti == "acme lux, akme lux", pulite[0].varianti)
+controlla("il gruppo si ripulisce, e chi non ce l'ha va in «altro»",
+          pulite[0].gruppo == "progetti" and pulite[1].gruppo == "altro")
+voc_f, cor_f = CARTELLA / "v.txt", CARTELLA / "c.txt"
+A.scrivi_parole(righe, voc_f, cor_f)
+controlla("file nuovi: nascono con un'intestazione che spiega il formato",
+          voc_f.read_text(encoding="utf-8").startswith("# Vocabolario")
+          and cor_f.read_text(encoding="utf-8").startswith("# Come Whisper"))
+rilette = A.leggi_parole(voc_f, cor_f)
+controlla("e si rileggono uguali", [(p.parola, p.varianti, p.gruppo) for p in rilette]
+          == [(p.parola, p.varianti, p.gruppo) for p in pulite])
+vecchie = D.CORREZIONI
+D.CORREZIONI = cor_f
+corrette = D.applica_correzioni("ho parlato con mario rosi di acme lux", D.carica_correzioni())
+D.CORREZIONI = vecchie
+controlla("l'app le usa davvero", corrette == "ho parlato con Mario Rossi di Acmelux", corrette)
+storia = CARTELLA / "s.md"
+D.STORICO, vecchio = storia, D.STORICO
+D.scrivi_storico("grezzo uno", "Pulito uno.", "pulito · pulitura non riuscita, testo grezzo", 12.4)
+D.scrivi_storico("grezzo due", "Pulito due.", "prompt", 3)
+voci = A.leggi_storico(storia)
+D.STORICO = vecchio
+controlla("lo storico si rilegge, dal più recente, anche col modo lungo",
+          [(v.testo, v.grezzo, v.modo, v.secondi) for v in voci]
+          == [("Pulito due.", "grezzo due", "prompt", 3),
+              ("Pulito uno.", "grezzo uno", "pulito · pulitura non riuscita, testo grezzo", 12)])
+
 print("\n— il .env scritto dal menu —")
 D.ENV.write_text("# la chiave\nGROQ_API_KEY=gsk_segreta\nDETTATURA_HOTKEY=<cmd>+s\n", encoding="utf-8")
 D.scrivi_env("DETTATURA_MICROFONO", "Mario Rossi’s iPhone Microphone", "il microfono")

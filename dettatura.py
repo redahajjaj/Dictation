@@ -69,6 +69,8 @@ from Foundation import (
 from PyObjCTools import AppHelper
 import objc
 
+from archivio import leggi_parole, leggi_storico, scrivi_parole
+from impostazioni import Impostazioni
 from microfono import FREQUENZA, Microfono, comando_figlio
 from pannello import (
     ATTESA,
@@ -919,9 +921,10 @@ class App(rumps.App):
             None,
             self.m_riprova,
             None,
-            rumps.MenuItem("Apri le correzioni", callback=self.apri_correzioni),
-            rumps.MenuItem("Apri il vocabolario", callback=self.apri_vocabolario),
-            rumps.MenuItem("Apri lo storico", callback=self.apri_storico),
+            rumps.MenuItem("Chiave Groq…", callback=lambda _: self.apri_impostazioni("chiave")),
+            rumps.MenuItem("Storico delle dettature…",
+                           callback=lambda _: self.apri_impostazioni("storico")),
+            rumps.MenuItem("Parole speciali…", callback=lambda _: self.apri_impostazioni("parole")),
             rumps.MenuItem("Apri il diario", callback=self.apri_diario),
             None,
             rumps.MenuItem("Esci", callback=rumps.quit_application),
@@ -1017,6 +1020,8 @@ class App(rumps.App):
         self._recuperate: list = []       # testi recuperati, in attesa di un momento libero
         self.m_riprova = None             # i menu li crea __init__: le prove non li hanno
         self.m_microfono = None
+        self._impostazioni = None         # la finestra (impostazioni.py), nasce al primo uso
+        self._chiave_chiesta = False      # la scheda Chiave si è già aperta da sola?
 
     # -- l'ascolto dei tasti --------------------------------------------------
     def _avvia_ascolto(self) -> bool:
@@ -1146,12 +1151,6 @@ class App(rumps.App):
             if m is item:
                 self.modo = nome
 
-    def apri_vocabolario(self, _):
-        subprocess.Popen(["open", "-t", str(VOCABOLARIO)])
-
-    def apri_correzioni(self, _):
-        subprocess.Popen(["open", "-t", str(CORREZIONI)])
-
     def apri_storico(self, _):
         STORICO.touch()
         subprocess.Popen(["open", "-t", str(STORICO)])
@@ -1233,6 +1232,90 @@ class App(rumps.App):
         self._rifai_menu_microfoni(attesa=0.0)
         if self._pannello is not None:
             self._pannello.imposta_microfono(nome or self.mic.microfoni.get("predefinito", ""))
+
+    # -- la finestra delle impostazioni (impostazioni.py) ------------------------
+    def apri_impostazioni(self, scheda: str = "chiave"):
+        if self._impostazioni is None:
+            self._impostazioni = Impostazioni.alloc().init().inizializza(self)
+        self._impostazioni.mostra(scheda)
+
+    def _chiedi_la_chiave(self):
+        """Chiave assente o rifiutata: si apre la scheda giusta. Una volta sola
+        per avvio — poi resta il ⚙ nella barra, senza finestre che saltano su."""
+        if not self._chiave_chiesta:
+            self._chiave_chiesta = True
+            self.apri_impostazioni("chiave")
+
+    def chiave_mascherata(self) -> str:
+        c = self.groq.chiave
+        return f"{c[:4]}…{c[-6:]}" if len(c) > 12 else ("…" if c else "")
+
+    def prova_chiave(self, chiave: str | None) -> tuple[bool, str, list[str]]:
+        """(funziona?, cosa dire, i modelli che può pulire) per questa chiave —
+        None è quella in uso. Si chiede a Groq l'elenco dei modelli: costa zero
+        e dice tutto. Va chiamata da un thread: è rete."""
+        chiave = self.groq.chiave if chiave is None else chiave
+        if not chiave:
+            return False, "nessuna chiave", []
+        try:
+            r = requests.get(f"{API}/models", headers={"Authorization": f"Bearer {chiave}"},
+                             timeout=(CONNESSIONE, 15))
+        except requests.RequestException:
+            return False, "Groq non risponde: controlla la rete", []
+        if r.status_code in (401, 403):
+            return False, "Groq rifiuta questa chiave", []
+        if r.status_code != 200:
+            return False, f"Groq risponde {r.status_code}", []
+        try:
+            attivi = [m["id"] for m in r.json().get("data", [])]
+        except (ValueError, KeyError, TypeError):
+            return False, "Groq ha risposto in modo strano", []
+        if MODELLO_STT not in attivi:
+            return False, f"su questo account manca {MODELLO_STT}", []
+        modelli = sorted(m for m in attivi if not any(e in m for e in MAI))
+        pulisce = self.modello_scelto() or next(
+            (m for m in LLM_PREFERITI if m in attivi), modelli[0] if modelli else "")
+        return True, f"funziona · pulisce con {pulisce}", modelli
+
+    def salva_chiave(self, chiave: str):
+        scrivi_env("GROQ_API_KEY", chiave)
+        self.cfg["GROQ_API_KEY"] = chiave
+        self.groq = Groq(chiave, self.cfg.get("DETTATURA_LLM", ""))
+        self._firma_config = firma_config()   # l'abbiamo scritto noi: niente da rileggere
+        self._chiave_chiesta = False
+        _log(f"chiave Groq cambiata dalle impostazioni (…{chiave[-6:]})")
+
+    def modello_scelto(self) -> str:
+        return self.cfg.get("DETTATURA_LLM", "")
+
+    def salva_modello(self, nome: str):
+        if nome == self.modello_scelto():
+            return
+        scrivi_env("DETTATURA_LLM", nome)
+        self.cfg["DETTATURA_LLM"] = nome
+        self.groq = Groq(self.groq.chiave, nome)
+        self._firma_config = firma_config()
+        _log(f"modello della pulitura: {nome or 'automatico'}")
+
+    def trascrizioni(self):
+        return leggi_storico(STORICO)
+
+    def copia_testo(self, testo: str):
+        negli_appunti(testo)
+
+    def parole(self):
+        return leggi_parole(VOCABOLARIO, CORREZIONI)
+
+    def salva_parole(self, parole):
+        scrivi_parole(parole, VOCABOLARIO, CORREZIONI)
+        self.vocabolario = carica_vocabolario()
+        self.correzioni = carica_correzioni()
+        self._firma_config = firma_config()
+        _log(f"parole speciali salvate dalle impostazioni: {len(self.vocabolario)} voci, "
+             f"{len(self.correzioni)} correzioni")
+
+    def apri_file_parole(self):
+        subprocess.Popen(["open", "-t", str(VOCABOLARIO), str(CORREZIONI)])
 
     # -- le dettature messe da parte -------------------------------------------
     def _aggiorna_riprova(self) -> None:
@@ -1450,6 +1533,8 @@ class App(rumps.App):
                 self._stato, self._etichetta = ev[0], ev[1]
                 if ev[1] == ERR_RETE:
                     self._pianifica_recupero(RECUPERO_PRIMA, copia=True)
+                elif ev[1] == ERR_CHIAVE_RIFIUTATA:
+                    self._chiedi_la_chiave()
                 if e_errore(ev[1]):
                     # arriva dal thread di trascrizione: qui è appena uscito
                     # dalla coda, quindi è un errore NUOVO anche se la stringa
@@ -1642,8 +1727,10 @@ class App(rumps.App):
 
     def _parti(self):
         if not self.groq.chiave:
-            # niente NSAlert: vedi ERR_CHIAVE in pannello.py
+            # niente NSAlert: vedi ERR_CHIAVE in pannello.py. Senza chiave non
+            # si detta: la finestra si apre da sola dove la si incolla
             self._segnala_errore(ERR_CHIAVE)
+            self._chiedi_la_chiave()
             return
         if permesso_microfono() == "negato":
             self._permesso_negato()

@@ -44,6 +44,24 @@ cronometro non si ferma. Se quello scelto non è collegato, si registra dal
 predefinito (il diario lo dice). Lo stesso elenco sta nel menu, alla voce
 **Microfono**.
 
+## Le impostazioni: il ⚙
+
+Il **⚙** nella barra (a riposo e sugli errori), o il menu **•••**, apre una
+finestra con tre schede:
+
+| Scheda | Cosa ci fai |
+|---|---|
+| **Chiave Groq** | vedi quella in uso (mascherata) e se funziona; ne incolli una nuova e premi **Prova e salva**: si salva solo se Groq la accetta. Scegli anche il modello che pulisce il testo |
+| **Storico** | tutte le dettature, dalla più recente, con la ricerca; il testo pulito o quello grezzo di Whisper, e **Copia** |
+| **Parole speciali** | i nomi da scrivere giusti e, accanto, come Whisper li sente male («acme lux» → «Acmelux»). Doppio clic su una cella per scrivere, **+** e **−** per aggiungere e togliere, **Salva** |
+
+Le parole sono i due file di sempre (`vocabolario.txt` e `correzioni.txt`),
+mostrati come una lista sola: al salvataggio si riscrivono tenendo intestazione
+e gruppi, e la versione di prima finisce in
+`~/Library/Application Support/Dettatura/copie-di-sicurezza/`. Valgono dalla
+dettatura dopo. Se la chiave manca o Groq la rifiuta, la finestra si apre da
+sola sulla scheda giusta.
+
 ## Mentre parli si vede l'onda, non le parole
 
 L'onda segue la tua voce: serve a vedere a colpo d'occhio che il microfono sta
@@ -117,8 +135,8 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
 .venv/bin/python dettatura.py     # primo avvio: crea .env, vocabolario e correzioni
 ```
 
-1. Apri `.env` e incolla la chiave: `GROQ_API_KEY=gsk_...` (⌃C per fermare il primo avvio)
-2. `./installa.sh` — compila l'app, la mette in **/Applications** e la apre
+1. `./installa.sh` — compila l'app, la mette in **/Applications** e la apre
+2. Alla prima ⌘S si apre la scheda **Chiave Groq**: incolla la chiave, **Prova e salva**
 3. `./avvio-automatico.sh` — parte da sola a ogni accesso, e si riapre se muore
 4. Alla prima dettatura macOS chiede il **Microfono**: concedilo
 5. **⌘S**, parli, **⌘S**. Il testo è già negli appunti.
@@ -161,9 +179,10 @@ qualcosa non torna. Il secondo è il **diario**: menu → *Apri il diario*.
 `vocabolario.txt` contiene i tuoi nomi. Finisce in due posti: come contesto per Whisper
 (che così tende alla grafia giusta invece che al suono) e come elenco di correzione per l'LLM.
 
-**Se sbaglia un nome, aggiungilo lì** (menu → *Apri il vocabolario*): vale dalla
-dettatura dopo, senza riavviare niente — l'app si accorge da sola che il file è
-cambiato. Lo stesso per `correzioni.txt` e per il `.env` (chiave, scorciatoia).
+**Se sbaglia un nome, aggiungilo** in **⚙ → Parole speciali**, e scrivi accanto come
+l'ha sentito: vale dalla dettatura dopo, senza riavviare niente. Si possono anche
+modificare i file a mano: l'app si accorge da sola che sono cambiati (lo stesso
+per il `.env`: chiave, scorciatoia).
 
 ## Ricompilare
 
@@ -186,7 +205,7 @@ Si ricompila solo dopo aver cambiato il codice (`dettatura.py`, `microfono.py`,
 
 - **Appunti** — il testo pulito
 - **`storico.md`** — ogni dettatura con data, versione pulita e grezza in un `<details>`.
-  Se sovrascrivi gli appunti per sbaglio, il testo è lì (menu → *Apri lo storico*)
+  Se sovrascrivi gli appunti per sbaglio, il testo è lì: **⚙ → Storico**, cerca, Copia
 - **L'audio** si salva in `da-trascrivere/` solo il tempo di mandarlo a Groq, e si
   cancella appena è trascritto; resta solo se la trascrizione non è riuscita
 - Fuori dal Mac va solo l'audio a Groq (trascrizione) e il testo grezzo (pulitura)
@@ -220,6 +239,7 @@ cartella del repo:
 | Sintomo | Causa |
 |---|---|
 | ⚠️ nella barra | leggi il messaggio: dice cosa è successo e, per il microfono, quale |
+| «Manca la chiave Groq» / «Groq rifiuta la chiave» | si apre da sola **⚙ → Chiave Groq**: incolla quella nuova e **Prova e salva** |
 | «Groq non risponde: dettatura messa da parte» | rete o Groq giù: quando torna, menu → *Riprova le dettature non trascritte* |
 | «"…" non manda suono» | quel microfono manda silenzio assoluto: ▾ e scegline un altro |
 | «Manca il permesso del Microfono» | la barra apre le Impostazioni al posto giusto: accendi Dettatura |
