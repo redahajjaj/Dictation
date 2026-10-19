@@ -45,6 +45,7 @@ import numpy as np
 import requests
 import rumps
 import soundfile as sf
+from urllib3.filepost import encode_multipart_formdata
 from AppKit import (
     NSApp,
     NSEventMaskLeftMouseUp,
@@ -420,6 +421,10 @@ SCADENZA_CHIAMATA = 90.0
 LIMITE_PROMPT = 880
 # il piano gratuito di Groq accetta file fino a 25 MB: oltre, si spedisce Opus
 LIMITE_FILE = 24 * 1024 * 1024
+# da qui in su (~50 s di FLAC) la barra dice a che punto è l'invio: su una rete
+# lenta tre minuti di voce viaggiano per decine di secondi, e un «trascrivo…»
+# fermo per tutto quel tempo sembra un'app piantata
+INVIO_LUNGO = 1024 * 1024
 # 🔴 La pulitura a pezzi. Il piano gratuito dà a gpt-oss-120b 8.000 token al
 # MINUTO, risposta compresa (misurato l'11/10): una dettatura di dieci minuti
 # in una richiesta sola li supera, e la pulitura falliva portandosi dietro
@@ -432,6 +437,28 @@ def _secondi_chiesti(intestazione) -> float | None:
         return float(intestazione)
     except (TypeError, ValueError):
         return None
+
+
+class _Invio(io.BytesIO):
+    """Il corpo di una richiesta, che requests spedisce a blocchi da 16 KB
+    perché è un file e non dei byte (vedi `trascrivi`). Se il corpo è grosso,
+    a ogni decimo spedito lo dice alla barra."""
+
+    def __init__(self, dati: bytes, avanzamento=None):
+        super().__init__(dati)
+        self._totale = len(dati)
+        self._avanzamento = avanzamento if len(dati) >= INVIO_LUNGO else None
+        self._detto = -1
+
+    def read(self, n=-1):
+        pezzo = super().read(n)
+        if self._avanzamento is not None:
+            decimi = self.tell() * 10 // self._totale
+            if decimi != self._detto:
+                self._detto = decimi
+                self._avanzamento("trascrivo…" if decimi >= 10
+                                  else f"invio l'audio… {decimi * 10}%")
+        return pezzo
 
 
 class Groq:
@@ -464,17 +491,23 @@ class Groq:
         self._llm = restanti[0]
         return self._llm
 
-    def _chiama(self, url: str, avanzamento=None, **kw) -> requests.Response:
+    def _chiama(self, url: str, avanzamento=None, corpo: bytes | None = None,
+                **kw) -> requests.Response:
         """Una POST a Groq, riprovata quando ha senso riprovare.
 
         Rete assente, DNS, tempo scaduto, 429 (troppe richieste) e 5xx si
         riprovano; il resto (401 chiave, 400 richiesta) no: la risposta
         sarebbe la stessa. Il diario del 12/9 ha due dettature perse per un
-        DNS che non rispondeva — al primo colpo, senza un secondo tentativo."""
+        DNS che non rispondeva — al primo colpo, senza un secondo tentativo.
+        `corpo` parte a blocchi (vedi `trascrivi`)."""
         ultimo = ""
         inizio = time.monotonic()
         for n in range(len(PAUSE) + 1):
             attesa = PAUSE[n] if n < len(PAUSE) else None
+            if corpo is not None:
+                # un file nuovo a ogni tentativo: quello di prima è già stato
+                # letto, e ripartirebbe vuoto
+                kw["data"] = _Invio(corpo, avanzamento)
             try:
                 r = self.s.post(url, **kw)
             except requests.RequestException as e:
@@ -504,23 +537,34 @@ class Groq:
             nome, audio = audio.name, audio.read_bytes()
         mime = mime or {".wav": "audio/wav", ".ogg": "audio/ogg"}.get(
             Path(nome).suffix.lower(), "audio/flac")
+        # 🔴 Il modulo si impacchetta qui e parte come FILE, non con `files=`.
+        # Con `files=` requests lo spedisce come byte, in un'unica scrittura
+        # TLS, e urllib3 gli dà il tempo della CONNESSIONE (10 s): tutto
+        # l'audio doveva arrivare a Groq in 10 secondi, se no «The write
+        # operation timed out». Una dettatura di 2 minuti e mezzo sono ~3 MB:
+        # su un Wi-Fi sotto i 2,5 Mbit/s in salita non ci stava MAI, nemmeno
+        # ai quattro tentativi (diario 16/10: 148 s e 166 s, fallite in 56 s =
+        # 4 × 10 s + le pause). Un file invece parte a blocchi da 16 KB, e i
+        # 10 s valgono per ogni blocco: si rinuncia solo se la rete si FERMA,
+        # non se è lenta (provato con `prova-rete-lenta.py`).
+        corpo, tipo = encode_multipart_formdata({
+            "file": (nome, audio, mime),
+            "model": MODELLO_STT,
+            "language": "it",
+            "response_format": "text",
+            "temperature": "0",
+            # Whisper usa il prompt come contesto: i nomi propri qui dentro
+            # lo orientano sulla grafia giusta invece che sul suono.
+            "prompt": suggerimento[:LIMITE_PROMPT],
+        })
         r = self._chiama(
             f"{API}/audio/transcriptions",
             avanzamento=avanzamento,
-            # i byte e non il file aperto: al secondo tentativo un file letto
-            # fino in fondo partirebbe vuoto
-            files={"file": (nome, audio, mime)},
-            data={
-                "model": MODELLO_STT,
-                "language": "it",
-                "response_format": "text",
-                "temperature": "0",
-                # Whisper usa il prompt come contesto: i nomi propri qui dentro
-                # lo orientano sulla grafia giusta invece che sul suono.
-                "prompt": suggerimento[:LIMITE_PROMPT],
-            },
-            # fra un byte e l'altro: Whisper risponde solo a trascrizione finita,
-            # e su Groq un minuto di audio si trascrive in un secondo o due
+            corpo=corpo,
+            headers={"Content-Type": tipo},
+            # spedito l'audio, quanto aspettare la risposta: Whisper risponde
+            # solo a trascrizione finita, e su Groq un minuto di audio si
+            # trascrive in un secondo o due
             timeout=(CONNESSIONE, 30 + secondi / 10),
         )
         return r.text.strip()

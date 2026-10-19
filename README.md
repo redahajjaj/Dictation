@@ -198,6 +198,7 @@ Si ricompila solo dopo aver cambiato il codice (`dettatura.py`, `microfono.py`,
 ./.venv/bin/python prova-logica.py      # le regole: tentativi, dettature da parte, pulitura (niente rete)
 ./.venv/bin/python prova-microfono.py   # il microfono in un processo a parte (usa il microfono vero)
 ./.venv/bin/python prova-barra.py       # la barra nei suoi stati
+./.venv/bin/python prova-rete-lenta.py  # l'audio arriva a Groq anche su un Wi-Fi lento (finto Groq locale)
 ./.venv/bin/python prova.py             # la catena vera: la voce del Mac detta, Groq trascrive
 ```
 
@@ -240,7 +241,8 @@ cartella del repo:
 |---|---|
 | ⚠️ nella barra | leggi il messaggio: dice cosa è successo e, per il microfono, quale |
 | «Manca la chiave Groq» / «Groq rifiuta la chiave» | si apre da sola **⚙ → Chiave Groq**: incolla quella nuova e **Prova e salva** |
-| «Groq non risponde: dettatura messa da parte» | rete o Groq giù: quando torna, menu → *Riprova le dettature non trascritte* |
+| «Groq non risponde: l'audio è salvo, riprovo da sola» | rete ferma o Groq giù: l'audio è in `da-trascrivere/` e l'app lo riprova da sola. Quando passa, il testo arriva negli appunti (o nella barra, se nel frattempo hai copiato altro) e nello **storico** (⚙ → Storico) |
+| Una dettatura lunga dice «Invio l'audio… 40%» | rete lenta: tre minuti di voce sono ~4 MB e viaggiano per decine di secondi. È normale, non si perde niente |
 | «"…" non manda suono» | quel microfono manda silenzio assoluto: ▾ e scegline un altro |
 | «Manca il permesso del Microfono» | la barra apre le Impostazioni al posto giusto: accendi Dettatura |
 | La scorciatoia non fa niente | guarda il diario (menu → *Apri il diario*): ogni pressione lascia «⌘S premuta». Se non c'è, l'app non sta girando (`pgrep -f Dettatura`) o un'altra app ha preso ⌘S prima di lei |

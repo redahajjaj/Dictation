@@ -30,7 +30,7 @@
 
 | File | Cos'è | Righe |
 |---|---|---|
-| `dettatura.py` | **il cervello**: config, Groq (tentativi, pulitura a pezzi), registrazione, recupero, menu, diagnosi, `--check` | ~2160 |
+| `dettatura.py` | **il cervello**: config, Groq (tentativi, audio a blocchi, pulitura a pezzi), registrazione, recupero, menu, diagnosi, `--check` | ~2300 |
 | `microfono.py` | **il microfono in un processo a parte**: il figlio (`figlio()`) e chi lo governa (`Microfono`) | ~590 |
 | `pannello.py` | la barra di vetro (PyObjC puro: blur, onda a 60 fps, animazioni, il ▾ del microfono, il ⚙) | ~1890 |
 | `impostazioni.py` | la finestra del ⚙: **Chiave Groq · Storico · Parole speciali** (solo la faccia: il lavoro lo fa l'app) | ~650 |
@@ -50,28 +50,29 @@
 
 | Riga ~ | Cosa |
 |---|---|
-| `_cartelle()` 130 | **risorse sigillate ≠ dati modificabili** (vedi sotto) |
-| `Groq` 400 · `_chiama` 465 | tentativi su rete/429/5xx, **scadenza 90 s** per chiamata; 401/400 non si riprovano |
-| `Groq.ripulisci` 526 | **a pezzi da 6000 caratteri** (8000 token/min), un pezzo fallito resta grezzo |
-| `suggerimento_whisper` 611 | il prompt di Whisper **dentro 880 caratteri** (Groq rifiuta oltre 896) |
-| `codifica` 624 | FLAC, o Opus se supera i 24 MB |
-| `metti_da_parte` 643 | l'audio su disco PRIMA di Groq: si cancella solo a trascrizione riuscita |
-| `negli_appunti` 717 | NSPasteboard, **mai `pbcopy`** — vedi le trappole |
-| `_log` 745 | il diario (ruota da solo oltre 512 KB in `dettatura.log.1`) |
-| `permesso_microfono` 786 | il permesso Microfono via AVFoundation dal runtime (caricato all'avvio) |
-| `_menu_modifica` 856 | il menu Modifica: senza, ⌘C/⌘V/⌘A/⌘Z non funzionano nella barra |
-| `App._stato_iniziale` 951 | **tutto lo stato** che non parla con macOS — lo usano anche le prove |
-| `App._premuto` 1113 | una pressione (scorciatoia o bottone), con il filtro dei doppi tocchi |
-| `App._voci_microfoni` 1161 · `scegli_microfono_da` 1194 | il menu dei microfoni (sottomenu e ▾ nella barra) |
-| `App._pianifica_recupero` 1273 | le dettature messe da parte si riprovano da sole |
-| `App._testo_attuale` 1354 | a cosa si accoda la dettatura nuova: **solo alla barra aperta** |
-| `App._battito` 1386 | il battito ogni 0,1 s (avvolto da `_tick`, che scrive i guasti nel diario) |
-| `App._parti` 1640 · `_ferma` 1704 · `_dopo_la_registrazione` 1720 | inizio, fine, e cosa farne dell'audio |
-| `App._dalla_voce_al_testo` 1753 · `_elabora` 1812 · `_recupera` 1849 | la catena, e i suoi due ingressi |
+| `_cartelle()` 133 | **risorse sigillate ≠ dati modificabili** (vedi sotto) |
+| `Groq` 403 · `_Invio` 442 · `_chiama` 494 | tentativi su rete/429/5xx, **scadenza 90 s** per chiamata; 401/400 non si riprovano |
+| `Groq.trascrivi` 533 | l'audio parte **a blocchi** (`encode_multipart_formdata` + `_Invio`), mai con `files=` — vedi le trappole |
+| `Groq.ripulisci` 572 | **a pezzi da 6000 caratteri** (8000 token/min), un pezzo fallito resta grezzo |
+| `suggerimento_whisper` 657 | il prompt di Whisper **dentro 880 caratteri** (Groq rifiuta oltre 896) |
+| `codifica` 670 | FLAC, o Opus se supera i 24 MB |
+| `metti_da_parte` 689 | l'audio su disco PRIMA di Groq: si cancella solo a trascrizione riuscita |
+| `negli_appunti` 763 | NSPasteboard, **mai `pbcopy`** — vedi le trappole |
+| `_log` 791 | il diario (ruota da solo oltre 512 KB in `dettatura.log.1`) |
+| `permesso_microfono` 832 | il permesso Microfono via AVFoundation dal runtime (caricato all'avvio) |
+| `_menu_modifica` 902 | il menu Modifica: senza, ⌘C/⌘V/⌘A/⌘Z non funzionano nella barra |
+| `App._stato_iniziale` 1001 | **tutto lo stato** che non parla con macOS — lo usano anche le prove |
+| `App._premuto` 1165 | una pressione (scorciatoia o bottone), con il filtro dei doppi tocchi |
+| `App._voci_microfoni` 1207 · `scegli_microfono_da` 1240 | il menu dei microfoni (sottomenu e ▾ nella barra) |
+| `App._pianifica_recupero` 1403 | le dettature messe da parte si riprovano da sole |
+| `App._testo_attuale` 1484 | a cosa si accoda la dettatura nuova: **solo alla barra aperta** |
+| `App._battito` 1516 | il battito ogni 0,1 s (avvolto da `_tick`, che scrive i guasti nel diario) |
+| `App._parti` 1772 · `_ferma` 1838 · `_dopo_la_registrazione` 1854 | inizio, fine, e cosa farne dell'audio |
+| `App._dalla_voce_al_testo` 1887 · `_elabora` 1946 · `_recupera` 1983 | la catena, e i suoi due ingressi |
 | `App.apri_impostazioni` · `prova_chiave` · `salva_chiave` · `salva_parole` | quello che la finestra del ⚙ chiede all'app (la chiave si salva solo se Groq la accetta) |
-| `_autodiagnosi` 1921 | `Dettatura --check` (fa nascere un figlio e gli fa elencare i microfoni) |
-| `_installa_diagnosi` 2029 · `_guardiano` 2085 | eccezioni e crash nel diario · esce se il thread principale si pianta |
-| `_senza_rubare_il_fuoco` 2112 | rumps non deve attivare l'app quando parte |
+| `_autodiagnosi` 2055 | `Dettatura --check` (fa nascere un figlio e gli fa elencare i microfoni) |
+| `_installa_diagnosi` 2163 · `_guardiano` 2219 | eccezioni e crash nel diario · esce se il thread principale si pianta |
+| `_senza_rubare_il_fuoco` 2246 | rumps non deve attivare l'app quando parte |
 
 ### `microfono.py`
 
@@ -136,6 +137,17 @@
   più.** `suggerimento_whisper` lo costruisce dentro il limite. **gpt-oss-120b sul piano gratuito:
   8.000 token al MINUTO**, risposta compresa: per questo la pulitura va a pezzi. Con
   `reasoning_effort: low` + `include_reasoning: false` la pulitura scende a ~1 s.
+- **L'audio verso Groq parte A BLOCCHI, mai con `files=`.** Con `files=` requests
+  spedisce il modulo in un'unica scrittura TLS, e urllib3 le dà il tempo della
+  *connessione* (10 s): tutta la dettatura doveva arrivare a Groq in 10 secondi. Il FLAC
+  pesa ~20 KB per secondo di voce: 2 minuti e mezzo = 3 MB, e sotto i ~2,5 Mbit/s in
+  salita fallivano SEMPRE, anche ai 4 tentativi (diario 16/10: «The write operation timed
+  out» dopo 56 s = 4 × 10 s + le pause; le corte passavano). `trascrivi` impacchetta il
+  modulo con `encode_multipart_formdata` e lo passa come file (`_Invio`): i 10 s valgono
+  per ogni blocco da 16 KB, cioè si rinuncia solo se la rete si FERMA. Provato su Groq
+  vero dietro un tubo da 150 KB/s: vecchio modo ❌ in 10 s, nuovo ✅ 631 parole in 31 s.
+  Banco: `prova-rete-lenta.py`. ⚠️ macOS scrive a scatti (~280 KB): un banco con un limite
+  più corto di uno scatto fa fallire anche il modo giusto, e mente.
 - **Una dettatura non si butta MAI.** Sopra i 4 s si manda sempre a Whisper (una soglia di volume
   fissa buttava via chi parla piano); l'audio va in `da-trascrivere/` prima di Groq; se la pulitura
   fallisce o l'LLM rende il vuoto, negli appunti va il grezzo. Se tocchi `_elabora`, tieni questi tre.
@@ -209,7 +221,8 @@ L'icona nella barra dei menu da fuori NON si vede in `CGWindowList` (su macOS 26
 **Prima di dire «fatto»:**
 1. `py_compile` + pyflakes sui file toccati (pyflakes non è nel venv: `pip install --target` in uno scratch)
 2. `prova-logica.py` (niente rete né microfono) · `prova-errore.py` · `prova-barra.py` ·
-   `prova-impostazioni.py` (la finestra del ⚙ su file finti; `scatti` per le foto)
+   `prova-impostazioni.py` (la finestra del ⚙ su file finti; `scatti` per le foto) ·
+   `prova-rete-lenta.py` se hai toccato Groq o la rete (~45 s, finto Groq locale)
 3. `prova-microfono.py` se hai toccato `microfono.py` (usa il microfono vero per ~30 s)
 4. `./installa.sh` (finisce con `--check`, che fa nascere un figlio dal bundle vero)
 5. `prova-bundle.py` (8 dettature sull'app installata) · `prova-clic.py`

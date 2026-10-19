@@ -9,6 +9,7 @@ pulitura a pezzi che lascia il grezzo invece di buttare tutto, cosa si fa a
 fine registrazione. Groq è finto: le risposte le decide la prova.
 """
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -152,10 +153,54 @@ except D.GroqIrraggiungibile:
 D.SCADENZA_CHIAMATA = scadenza
 g = groq_finto([Risposta(503, "giù"), Risposta(200, "ok")])
 controlla("Groq sovraccarico una volta: si riprova", g.trascrivi(b"audio", "p") == "ok")
+def campo(kw, nome) -> bytes:
+    """Un campo del modulo che `trascrivi` ha impacchettato a mano."""
+    corpo = kw["data"].getvalue()
+    return re.search(rb'name="' + nome.encode() + rb'"[^\r]*\r\n(?:[^\r]+\r\n)*\r\n(.*?)\r\n--',
+                     corpo, re.S).group(1)
+
+
 g = groq_finto([Risposta(200, "x")])
 g.trascrivi(b"audio", "p" * 2000)
 controlla("anche un prompt troppo lungo passato a mano viene tagliato",
-          len(g.s.chiamate[0][1]["data"]["prompt"]) <= 896)
+          len(campo(g.s.chiamate[0][1], "prompt")) <= 896)
+
+
+class SessioneCheLegge(SessioneFinta):
+    """Come quella vera: il corpo lo legge a blocchi da 16 KB, fino in fondo."""
+
+    def __init__(self, risposte):
+        super().__init__(risposte)
+        self.letti = []
+
+    def post(self, url, **kw):
+        letti = b""
+        while pezzo := kw["data"].read(16384):
+            letti += pezzo
+        self.letti.append(letti)
+        return super().post(url, **kw)
+
+
+print("\n— l'audio parte a blocchi (diario 16/10: 148 s e 166 s non partivano) —")
+audio = bytes(range(256)) * 8192                      # 2 MB: ~100 s di FLAC
+g = groq_finto([])
+g.s = SessioneCheLegge([DNS, Risposta(200, "ok")])
+detti = []
+g.trascrivi(audio, "p", avanzamento=detti.append)
+controlla("parte come file, non come byte in un colpo solo",
+          hasattr(g.s.chiamate[0][1]["data"], "read")
+          and "multipart/form-data" in g.s.chiamate[0][1]["headers"]["Content-Type"])
+controlla("al secondo tentativo l'audio riparte intero, non vuoto",
+          len(g.s.letti) == 2 and g.s.letti[0] == g.s.letti[1] and audio in g.s.letti[1],
+          f"{[len(x) for x in g.s.letti]} byte")
+controlla("il file nel modulo è l'audio, intero", campo(g.s.chiamate[1][1], "file") == audio)
+controlla("un audio lungo dice a che punto è l'invio, poi «trascrivo…»",
+          "invio l'audio… 50%" in detti and detti[-1] == "trascrivo…", detti[-3:])
+g = groq_finto([])
+g.s = SessioneCheLegge([Risposta(200, "ok")])
+detti = []
+g.trascrivi(b"audio corto", "p", avanzamento=detti.append)
+controlla("un audio corto non fa ballare la barra", detti == [], detti)
 
 print("\n— la pulitura —")
 g = groq_finto([chat("Ciao, come stai?")])

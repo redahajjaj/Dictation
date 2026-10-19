@@ -120,8 +120,10 @@ ERR_MIC = Errore("microfono non disponibile")
 ERR_CHIAVE = Errore("manca la chiave Groq")
 ERR_CHIAVE_RIFIUTATA = Errore("Groq rifiuta la chiave")
 ERR_PERMESSO = Errore("manca il permesso del Microfono")
-# la rete: la dettatura NON è persa, sta in da-trascrivere/ e il menu la riprova
-ERR_RETE = Errore("Groq non risponde: dettatura messa da parte")
+# la rete: la dettatura NON è persa, sta in da-trascrivere/ e l'app la riprova
+# da sola (`_pianifica_recupero`). Lo dice la frase: l'avviso dura due secondi,
+# e «messa da parte» non diceva che sarebbe tornata — sembrava persa.
+ERR_RETE = Errore("Groq non risponde: l'audio è salvo, riprovo da sola")
 ERRORI = frozenset({ERR_CORTO, ERR_VOCE, ERR_NIENTE, ERR_GENERICO, ERR_MIC,
                     ERR_CHIAVE, ERR_CHIAVE_RIFIUTATA, ERR_PERMESSO, ERR_RETE})
 

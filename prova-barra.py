@@ -291,6 +291,20 @@ def main():
     p.aggiorna(P.PRONTO, P.ERR_GENERICO)
     controlla("09b errore: vince sul testo", misure()[1] == P.NOCC_A, f"{misure()}")
 
+    # 09c la rete: la frase lunga dice che l'audio è salvo, e si legge tutta
+    p.imposta_testo("")
+    p.aggiorna(P.PRONTO, P.ERR_RETE)
+    m = p.messaggio
+    controlla("09c rete: si legge tutta, senza puntini",
+              m.frame().size.width + 1 >= P._larghezza(str(m.stringValue()), m.font()),
+              f"{m.frame().size.width:.0f} ≥ {P._larghezza(str(m.stringValue()), m.font()):.0f}")
+    scatta("09c-rete")
+    # 09d una dettatura lunga in viaggio su una rete lenta
+    p.aggiorna(P.ELABORA, "invio l'audio… 40%")
+    controlla("09d invio: lo dice", str(p.messaggio.stringValue()) == "Invio l'audio… 40%",
+              str(p.messaggio.stringValue()))
+    scatta("09d-invio")
+
     # 10 premuto mentre elabora
     p.imposta_testo("")
     p.aggiorna(P.ELABORA, P.ATTESA)
