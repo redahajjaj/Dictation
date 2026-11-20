@@ -29,7 +29,7 @@ import pannello as P
 # in fondo al file, che le riaccendono per il tempo che serve.
 P.ANIMA = False
 
-SCATTI = Path(__file__).resolve().parent / ".scratch" / "barra-liquid-glass" / "prototipo" / "barra-vera"
+SCATTI = Path(__file__).resolve().parent / "Claude" / ".scratch" / "barra-liquid-glass" / "prototipo" / "barra-vera"
 FOTO = "/System/Library/Desktop Pictures/Sonoma.heic"
 
 CORTO = "Ricordami di chiamare Giulia"

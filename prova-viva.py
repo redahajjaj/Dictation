@@ -20,7 +20,7 @@ from AppKit import NSScreen, NSTimer
 import pannello as P
 from dettatura import App
 
-SCATTI = Path(__file__).resolve().parent / ".scratch" / "barra-liquid-glass" / "prototipo" / "barra-vera"
+SCATTI = Path(__file__).resolve().parent / "Claude" / ".scratch" / "barra-liquid-glass" / "prototipo" / "barra-vera"
 MEDIO = "Per Acmelux dobbiamo ancora decidere il corriere"
 
 errori = []

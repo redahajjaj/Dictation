@@ -5,6 +5,17 @@
 > **un processo a parte per il microfono** (PortAudio) + Groq (Whisper per la voce, un LLM per la pulitura).
 > Uso quotidiano di Reda: se si rompe, si ferma il lavoro di tutti gli altri progetti.
 
+## 📁 Dove stanno le cose (regola di Reda, 19/11/2026 — vale in tutti i progetti)
+
+- **`Claude/` è il mondo di Claude**: questo file, `TRASLOCO.md`, `.scratch/` (prototipi, screenshot e mappe di lavoro, fuori dal repo) e, quando servono, note ed esiti (`Claude/esiti/`, fuori da git). Lo organizzi liberamente.
+- **Fuori da `Claude/` ci sono le cose di Reda**: le leggi e le modifichi, ma non ci lasci file tuoi. Quello che gli serve lo riceve in chat; se vuole un file lo chiede.
+- Questo file lo carica `.claude/CLAUDE.md`, un rimando di una riga: Claude Code legge le istruzioni solo dalla radice o da `.claude/`. Se lo sposti, sposta anche il rimando.
+- **Codice del prodotto** (in radice: i 6 moduli `dettatura.py` `microfono.py` `pannello.py` `impostazioni.py` `archivio.py` `scorciatoia.py`, la build `Dettatura.spec` + `installa.sh`, i banchi di prova `prova*.py`, che importano i moduli accanto a sé, e il `README.md` pubblico): il codice nuovo dell'app resta lì, dove serve alla build. In `Claude/` vanno solo gli attrezzi di Claude: note, esiti, prototipi, script di lavoro (Reda 1A, 20/11).
+- **I dati dell'app restano in radice** (l'app li cerca lì, tutti gitignorati): `vocabolario.txt`, `correzioni.txt`, `storico.md`, `dettatura.log`, `da-trascrivere/`.
+- **Restano in radice per forza** (li cercano gli strumenti lì): `.claude/`, `.gitignore`, `.env*`, `.venv/`.
+- ⚠️ Il repo è **pubblico**: al push va online anche `Claude/` (tranne `.scratch/` ed `esiti/`). Niente nomi veri, anche qui.
+- Trasloco del 20/11/2026: percorsi vecchi → nuovi in `Claude/TRASLOCO.md`.
+
 **Stato del cantiere (aperto/trappole/chi fa cosa):**
 
 @~/.claude/stato/dettatura.md
@@ -245,7 +256,7 @@ non si possono dimenticare:
   vero dentro un file versionato (README, prova-*.py, commenti), finisce online** —
   compresi i nomi dei microfoni (l'iPhone porta il nome del proprietario): negli
   esempi si usa «Mario Rossi».
-- **`.scratch/` e `da-trascrivere/` sono fuori dal repo**: prototipi e screenshot
+- **`Claude/.scratch/` e `da-trascrivere/` sono fuori dal repo**: prototipi e screenshot
   la prima, la voce di Reda la seconda.
 - **La storia è stata riscritta** il 12/9 (`filter-branch`) per togliere nomi e
   `.scratch` da tutti i commit. Chi avesse un vecchio clone deve ri-clonare.
